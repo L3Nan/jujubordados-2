@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { EMPTY_OPERATIONS, parseOperations, type LocalOrder, type LocalQuote, type Operations } from "@/data/store-operations";
+import { EMPTY_OPERATIONS, parseOperations, type FinanceEntry, type LocalOrder, type LocalQuote, type Operations } from "@/data/store-operations";
 import { isAdminSession } from "@/lib/admin-auth";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -36,6 +36,10 @@ export async function GET(request: Request) {
         (SELECT json_group_array(json_object('id', p.id, 'amountCents', p.amount_cents, 'receivedAt', p.received_at)) FROM order_payments p WHERE p.order_id=o.id) AS payments_json
       FROM orders o ORDER BY o.created_at DESC LIMIT 500
     `).all<{ id: string; customer_name: string; customer_phone: string; delivery_mode: "delivery" | "pickup"; address: string; city: string; state: string; postal_code: string; total_cents: number; status: LocalOrder["status"]; payment_status: LocalOrder["paymentStatus"]; due_date: string | null; created_at: string; items_json: string; payments_json: string }>();
+    const financeResult = await env.DB.prepare("SELECT id, kind, category, description, amount_cents, entry_date, related_order_id FROM finance_entries ORDER BY entry_date DESC, created_at DESC LIMIT 1000").all<{ id: string; kind: FinanceEntry["kind"]; category: string; description: string; amount_cents: number; entry_date: string; related_order_id: string | null }>();
+    const financeEntries: FinanceEntry[] = (financeResult.results ?? []).map((entry) => ({ id: entry.id, kind: entry.kind, category: entry.category, description: entry.description, amountCents: entry.amount_cents, date: entry.entry_date, relatedOrderId: entry.related_order_id ?? undefined }));
+    const persistedFinanceIds = new Set(financeEntries.map((entry) => entry.id));
+    financeEntries.push(...storedOperations.financeEntries.filter((entry) => !persistedFinanceIds.has(entry.id)));
     const webOrders: LocalOrder[] = (result.results ?? []).map((row) => {
       const items = JSON.parse(row.items_json || "[]") as Array<{ product_name: string; quantity: number; size: string; color: string; unit_price_cents: number }>;
       const payments = JSON.parse(row.payments_json || "[]") as NonNullable<LocalOrder["payments"]>;
@@ -47,7 +51,7 @@ export async function GET(request: Request) {
       return existing ? { ...existing, name: order.customerName || existing.name } : { id: `WEB-${order.id}`, name: order.customerName, phone: order.customerPhone, email: "", notes: "" };
     });
     const manualOrders = storedOperations.orders.filter((order) => !uuidPattern.test(order.id));
-    const operations = { ...storedOperations, orders: [...webOrders, ...manualOrders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), customers: [...storedOperations.customers.filter((customer) => !webPhones.has(customer.phone.replace(/\D/g, ""))), ...webCustomers] };
+    const operations = { ...storedOperations, financeEntries, orders: [...webOrders, ...manualOrders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), customers: [...storedOperations.customers.filter((customer) => !webPhones.has(customer.phone.replace(/\D/g, ""))), ...webCustomers] };
     return Response.json({ operations }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "operations_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
@@ -66,19 +70,13 @@ export async function PUT(request: Request) {
   const webOrders = operations.orders.filter((order) => uuidPattern.test(order.id));
   try {
     await env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('operations', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_at=excluded.updated_at").bind(JSON.stringify({ ...operations, orders: localOrders })).run();
-    const existing = await env.DB.prepare("SELECT o.id, o.status, o.payment_status, o.due_date, (SELECT json_group_array(json_object('id', p.id, 'amountCents', p.amount_cents, 'receivedAt', p.received_at)) FROM order_payments p WHERE p.order_id=o.id) AS payments_json FROM orders o").all<{ id: string; status: string; payment_status: string; due_date: string | null; payments_json: string }>();
+    const existing = await env.DB.prepare("SELECT o.id, o.status, o.due_date FROM orders o").all<{ id: string; status: string; due_date: string | null }>();
     const currentOrders = new Map((existing.results ?? []).map((row) => [row.id, row]));
     const statements = webOrders.flatMap((order) => {
       const current = currentOrders.get(order.id);
       if (!current) return [];
       const changes = [];
-      if (current.status !== order.status || current.payment_status !== order.paymentStatus || current.due_date !== (order.dueDate ?? null)) changes.push(env.DB.prepare("UPDATE orders SET status=?, payment_status=?, due_date=? WHERE id=?").bind(order.status, order.paymentStatus, order.dueDate ?? null, order.id));
-      const currentPayments = JSON.parse(current.payments_json || "[]") as NonNullable<LocalOrder["payments"]>;
-      const nextPayments = order.payments ?? [];
-      if (JSON.stringify([...currentPayments].sort((a, b) => a.id.localeCompare(b.id))) !== JSON.stringify([...nextPayments].sort((a, b) => a.id.localeCompare(b.id)))) {
-        changes.push(env.DB.prepare("DELETE FROM order_payments WHERE order_id=?").bind(order.id));
-        changes.push(...nextPayments.map((payment) => env.DB.prepare("INSERT INTO order_payments (id, order_id, amount_cents, received_at) VALUES (?, ?, ?, ?)").bind(payment.id, order.id, payment.amountCents, payment.receivedAt)));
-      }
+      if (current.status !== order.status || current.due_date !== (order.dueDate ?? null)) changes.push(env.DB.prepare("UPDATE orders SET status=?, due_date=? WHERE id=?").bind(order.status, order.dueDate ?? null, order.id));
       return changes;
     });
     for (let offset = 0; offset < statements.length; offset += 50) await env.DB.batch(statements.slice(offset, offset + 50));

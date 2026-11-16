@@ -24,7 +24,7 @@
 | 9. Orçamentos | Itens múltiplos, validade, entrega, sinal, PDF, edição e conversão | Implementado | Aceita até 30 itens, permite editar propostas em aberto, seleciona clientes do CRM e produtos/variações ativos do catálogo, compõe resumo para WhatsApp, baixa um PDF independente ou imprime e converte todos os itens/valores em pedido. Propostas anteriores de item único continuam compatíveis. |
 | 10. Clientes | CRM, endereço, aniversário, gasto total, busca, histórico e WhatsApp | Parcial | Cadastro básico, aniversário e histórico derivado de pedidos existem. Endereço, totais agregados, busca robusta e política de consentimento no fluxo não estão completos. Dados operacionais são sincronizados ao D1 em um documento JSON. |
 | 11. Cobranças e vendas a prazo | Central, parcelas, atrasos, pagamentos parciais e lembretes | Parcial | Pedidos têm vencimento, saldo e recebimentos parciais. Não há entidade de parcelas/cobranças independente, filtros de vencidas/vencem hoje ou lembrete WhatsApp dedicado. |
-| 12. Financeiro | Receitas efetivamente recebidas, despesas, categorias e meta mensal | Parcial | Há registro de recebimentos/despesas e meta. A conferência entre pagamentos de pedidos e lançamentos financeiros ainda depende de ação manual; os dados operacionais são um snapshot JSON. |
+| 12. Financeiro | Receitas efetivamente recebidas, despesas, categorias e meta mensal | Parcial | Recebimentos de pedidos e despesas/entradas avulsas são persistidos em tabela D1. Novo recebimento grava pagamento e receita em lote transacional com chave idempotente; migração 0009 importa os lançamentos antigos do snapshot. Meta e demais dados operacionais seguem no JSON; relatórios financeiros avançados continuam pendentes. |
 | 13. Cupons | Percentual/valor, ativar/pausar e uso único por cliente | Parcial | Cupons percentuais/fixos são validados pelo servidor e podem ser ativados. Não há regra de uso único por cliente, limite de validade ou auditoria de utilizações. |
 | 14. Frete tradicional | CEP/cidade/UF, retirada, grátis, prazo e regra mais específica | Parcial | Regras por CEP/cidade/UF/região e retirada são suportadas no checkout. Pedidos manuais podem registrar endereço completo e gerar etiqueta de endereçamento em PDF. Não há prazo de entrega, nome/método exibido completo nem configuração de entrega grátis como modalidade distinta. |
 
@@ -52,7 +52,7 @@ Estes itens são adaptações ou extensões, não requisitos exclusivos do manua
 
 ## Prioridade recomendada
 
-1. **Confiabilidade operacional:** alinhar pagamentos ao financeiro; pedidos manuais agora associam itens e atualizam estoque na mesma transação.
+1. **Confiabilidade operacional:** pedidos manuais associam itens e atualizam estoque na mesma transação; pagamentos e receitas agora são gravados juntos no D1 e evitam repetição por reenvio da mesma tentativa.
 2. **Conta e privacidade:** definir o modelo de usuários da loja, contato de recuperação, e-mail/domínio, aviso de privacidade e exportação/exclusão de dados.
 3. **Finalização da vitrine:** editor de aparência/conteúdo, opções de pagamento, destaque ordenável e prazo de frete.
 4. **Documentos comerciais:** orçamento com múltiplos itens, edição e conversão fiel, além de PDF do pedido e etiqueta de endereçamento. Etiqueta oficial/rastreio depende de integração de frete.
