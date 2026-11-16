@@ -324,6 +324,7 @@ export default function AdminPanel() {
   const [categoryName, setCategoryName] = useState("");
   const [subcategoryParent, setSubcategoryParent] = useState("");
   const [notice, setNotice] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
   const section = useSyncExternalStore(subscribeToSection, getSectionSnapshot, getServerSectionSnapshot);
   const operationsJson = useSyncExternalStore(subscribeToOperations, getOperationsSnapshot, getServerOperationsSnapshot);
   const operations = useMemo(() => parseOperations(operationsJson), [operationsJson]);
@@ -487,6 +488,30 @@ export default function AdminPanel() {
     setFinanceDate(localToday.slice(0, 10));
     setCurrentMonth(localToday.slice(0, 7));
     window.location.hash = "finance";
+  }
+
+  async function restoreBackupFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    setNotice("");
+    try {
+      if (file.size > 900_000) throw new Error("O arquivo excede o limite de 900 KB.");
+      const backup: unknown = JSON.parse(await file.text());
+      if (!backup || typeof backup !== "object" || !("format" in backup) || backup.format !== "jujubordados-backup" || !("version" in backup) || backup.version !== 1) throw new Error("Este arquivo não é um backup compatível da Jujubordados.");
+      if (!window.confirm("Restaurar este backup vai substituir as configurações, catálogo, pedidos, recebimentos, financeiro, estoque e métricas atuais. As fotos e inscrições push não estão no arquivo. Essa ação não pode ser desfeita. Deseja continuar?")) return;
+      setBackupBusy(true);
+      const response = await fetch("/api/admin/backup/restore", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ backup, confirmReplace: true }) });
+      if (response.status === 401) throw new Error("Sua sessão expirou. Entre novamente no painel.");
+      if (response.status === 413) throw new Error("O backup excede o limite de 900 KB.");
+      if (!response.ok) throw new Error("Não foi possível restaurar o backup. Os dados não foram confirmados como restaurados.");
+      setNotice("Backup restaurado. Recarregue o painel para sincronizar os dados recuperados.");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Não foi possível ler ou restaurar este arquivo.");
+    } finally {
+      setBackupBusy(false);
+      input.value = "";
+    }
   }
 
   function updateProduct(id: string, update: Partial<StoreProduct>) {
@@ -974,6 +999,7 @@ export default function AdminPanel() {
           <PwaInstall />
           <ShareQr products={catalog} categories={categories} />
           <div className="admin-shortcuts"><a href="#orders">＋ Registrar pedido manual <span>→</span></a><a href="#customers">＋ Cadastrar cliente <span>→</span></a><a href="#catalog">◈ Gerenciar catálogo <span>→</span></a><a href="#categories">▦ Categorias e subcategorias <span>→</span></a><a href="#quotes">▧ Criar orçamento <span>→</span></a><a href="#coupons">% Gerenciar cupons <span>→</span></a><a href="#calendar">▦ Planejar datas <span>→</span></a><a href="/api/admin/backup">↓ Baixar backup dos dados</a></div>
+          {isProduction && <section className="admin-backup-tools" aria-labelledby="backup-tools-title"><div><p className="eyebrow">RECUPERAÇÃO DE DADOS</p><h2 id="backup-tools-title">Restaurar um backup</h2><p>Importar substituirá os dados da loja incluídos no arquivo. Confirme a operação na próxima etapa.</p></div><label className="admin-backup-file">{backupBusy ? "Restaurando…" : "Escolher arquivo JSON"}<input type="file" accept="application/json,.json" disabled={backupBusy} onChange={(event) => void restoreBackupFile(event)} /></label><small>Limite do arquivo: 900 KB. Fotos e inscrições push não são restauradas. Guarde o arquivo em local seguro: ele contém dados de clientes e pedidos.</small></section>}
           <section className="admin-next"><span>RECEBIMENTOS E COBRANÇAS</span><p>Registre cada parcela no pedido. O recebimento também entra no caixa; pedidos cancelados não compõem o saldo a receber. {isProduction ? "Os dados são sincronizados com o banco da loja." : "As informações desta demonstração ficam somente neste navegador."}</p></section>
           </>}
           {section === "metrics" && <StoreMetrics />}

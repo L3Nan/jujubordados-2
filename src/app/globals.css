@@ -259,6 +259,12 @@ a { color: inherit; text-decoration: none; }
   .site-footer p { order: 3; width: 100%; margin: -5px 0 0; }
 }
 
+@media (max-width: 700px) {
+  .admin-backup-tools { grid-template-columns: 1fr; }
+  .admin-backup-tools > small { grid-column: auto; }
+  .admin-backup-file { justify-content: center; }
+}
+
 .admin-page { min-height: 100vh; display: grid; grid-template-columns: 245px 1fr; background: #f8f6f1; }
 .admin-sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 27px 20px; border-right: 1px solid #e8e3da; background: #fffdf9; }
 .admin-brand { gap: 9px; }
@@ -377,6 +383,14 @@ a { color: inherit; text-decoration: none; }
 .admin-shortcuts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 15px; }
 .admin-shortcuts a { display: flex; justify-content: space-between; align-items: center; min-height: 55px; padding: 0 15px; border: 1px solid #e8e3da; background: #fffdf9; color: #5d584f; text-align: left; font-size: 10px; }
 .admin-shortcuts a:hover { border-color: #c9a697; color: #8b5f53; }
+.admin-backup-tools { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px 20px; margin-top: 16px; padding: 19px; border: 1px solid #e6dfd5; background: #fffdf9; }
+.admin-backup-tools h2 { margin: 0; font-family: var(--serif); font-size: 23px; font-weight: 400; }
+.admin-backup-tools .eyebrow { margin-bottom: 6px; }
+.admin-backup-tools p:not(.eyebrow) { margin: 6px 0 0; color: #777166; font-size: 10px; }
+.admin-backup-tools > small { grid-column: 1 / -1; color: #8a8277; font-size: 9px; line-height: 1.5; }
+.admin-backup-file { position: relative; display: inline-flex; align-items: center; min-height: 40px; padding: 0 13px; background: var(--ink); color: #fff; font-size: 10px; cursor: pointer; }
+.admin-backup-file input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.admin-backup-file:focus-within { outline: 2px solid var(--rose-deep); outline-offset: 3px; }
 .admin-add-button { min-height: 39px; border: 0; cursor: pointer; }
 .admin-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; padding: 17px; border: 1px solid #eee7dc; background: #faf7f1; }
 .admin-form-grid label { display: flex; flex-direction: column; gap: 6px; color: #777166; font-size: 9px; }

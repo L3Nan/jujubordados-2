@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 import { isAdminSession } from "@/lib/admin-auth";
 
+const MAX_BACKUP_BYTES = 900_000;
+
 async function rows<T>(query: string) {
   const result = await env.DB.prepare(query).all<T>();
   return result.results ?? [];
@@ -27,7 +29,9 @@ export async function GET(request: Request) {
       data: { settings, orders, orderItems, orderPayments, financeEntries, productInventory, metrics },
     };
     const date = new Date().toISOString().slice(0, 10);
-    return new Response(JSON.stringify(backup, null, 2), {
+    const payload = JSON.stringify(backup, null, 2);
+    if (new TextEncoder().encode(payload).byteLength > MAX_BACKUP_BYTES) return Response.json({ error: "backup_too_large", message: "Os dados excedem o tamanho compatível com exportação/restauração pelo painel." }, { status: 413, headers: { "Cache-Control": "no-store" } });
+    return new Response(payload, {
       headers: {
         "Cache-Control": "no-store, private",
         "Content-Type": "application/json; charset=utf-8",
