@@ -367,7 +367,7 @@ export default function Storefront() {
     field.setAttribute("readonly", "");
     field.style.position = "fixed";
     field.style.opacity = "0";
-    document.body.append(field);
+    document.body.appendChild(field);
     field.select();
     let copiedSuccessfully = false;
     try { copiedSuccessfully = document.execCommand("copy"); } catch { copiedSuccessfully = false; }
