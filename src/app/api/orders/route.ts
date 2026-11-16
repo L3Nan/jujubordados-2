@@ -18,7 +18,7 @@ async function notifyStoreOwner() {
       try {
         const subscription = JSON.parse(row.subscription_json) as PushSubscription;
         const payload = await buildPushPayload({ data: JSON.stringify({ title: "Novo pedido na Jujubordados", body: "Há um pedido aguardando atendimento." }), options: { ttl: 60 } }, subscription, vapid);
-        const response = await fetch(subscription.endpoint, payload);
+        const response = await fetch(subscription.endpoint, { ...payload, signal: AbortSignal.timeout(5000) });
         if (response.status === 404 || response.status === 410) return row.id;
         if (!response.ok) console.error(JSON.stringify({ message: "push delivery failed", status: response.status }));
       } catch (error) {
@@ -57,7 +57,7 @@ function cents(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-export async function POST(request: Request, context: { waitUntil(promise: Promise<unknown>): void }) {
+export async function POST(request: Request) {
   const origin = request.headers.get("Origin");
   if (origin && origin !== new URL(request.url).origin) return Response.json({ error: "forbidden" }, { status: 403 });
   let input: OrderInput;
@@ -139,7 +139,7 @@ export async function POST(request: Request, context: { waitUntil(promise: Promi
 
   try {
     await env.DB.batch(statements);
-    context.waitUntil(notifyStoreOwner());
+    await notifyStoreOwner();
     return Response.json({ id }, { status: 201 });
   } catch {
     return Response.json({ error: "order_save_failed" }, { status: 503 });
