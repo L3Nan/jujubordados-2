@@ -34,12 +34,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: "forbidden" }, { status: 403 });
   if (!await isAdminSession(request)) return Response.json({ error: "unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
-  let body: { customerName?: unknown; customerPhone?: unknown; dueDate?: unknown; items?: unknown };
+  let body: { customerName?: unknown; customerPhone?: unknown; dueDate?: unknown; deliveryMode?: unknown; address?: unknown; city?: unknown; state?: unknown; postalCode?: unknown; items?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ error: "invalid_json" }, { status: 400 }); }
   const customerName = typeof body.customerName === "string" ? body.customerName.trim() : "";
   const customerPhone = typeof body.customerPhone === "string" ? body.customerPhone.trim() : "";
   const dueDate = typeof body.dueDate === "string" ? body.dueDate : "";
-  if (!customerName || customerName.length > 120 || customerPhone.length > 40 || (customerPhone && !/^\+?[\d\s().-]{8,40}$/.test(customerPhone)) || (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T12:00:00Z`)) || new Date(`${dueDate}T12:00:00Z`).toISOString().slice(0, 10) !== dueDate)) || !Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) return Response.json({ error: "invalid_manual_order" }, { status: 400 });
+  const deliveryMode = body.deliveryMode === "delivery" ? "delivery" : body.deliveryMode === "pickup" || body.deliveryMode === undefined ? "pickup" : "";
+  const address = typeof body.address === "string" ? body.address.trim() : "";
+  const city = typeof body.city === "string" ? body.city.trim() : "";
+  const state = typeof body.state === "string" ? body.state.trim().toUpperCase() : "";
+  const postalCode = typeof body.postalCode === "string" ? body.postalCode.replace(/\D/g, "") : "";
+  const validDestination = deliveryMode === "pickup" || (deliveryMode === "delivery" && address.length > 0 && address.length <= 240 && city.length > 0 && city.length <= 100 && /^[A-Z]{2}$/.test(state) && /^\d{8}$/.test(postalCode));
+  if (!customerName || customerName.length > 120 || customerPhone.length > 40 || (customerPhone && !/^\+?[\d\s().-]{8,40}$/.test(customerPhone)) || !deliveryMode || !validDestination || (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T12:00:00Z`)) || new Date(`${dueDate}T12:00:00Z`).toISOString().slice(0, 10) !== dueDate)) || !Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) return Response.json({ error: "invalid_manual_order" }, { status: 400 });
 
   let catalog: StoreProduct[] = initialCatalog;
   try {
@@ -74,7 +80,7 @@ export async function POST(request: Request) {
   const id = crypto.randomUUID();
   const statements = [
     ...catalog.filter((product) => product.stockQuantity !== undefined).map((product) => env.DB.prepare("INSERT OR IGNORE INTO product_inventory (product_id, stock_quantity, low_stock_threshold) VALUES (?, ?, ?)").bind(product.id, product.stockQuantity, product.lowStockThreshold ?? 0)),
-    env.DB.prepare("INSERT INTO orders (id, customer_name, customer_phone, delivery_mode, subtotal_cents, discount_cents, shipping_cents, total_cents, due_date) VALUES (?, ?, ?, 'pickup', ?, 0, 0, ?, ?)").bind(id, customerName, customerPhone, totalCents, totalCents, dueDate || null),
+    env.DB.prepare("INSERT INTO orders (id, customer_name, customer_phone, delivery_mode, address, city, state, postal_code, subtotal_cents, discount_cents, shipping_cents, total_cents, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)").bind(id, customerName, customerPhone, deliveryMode, deliveryMode === "delivery" ? address : "", deliveryMode === "delivery" ? city : "", deliveryMode === "delivery" ? state : "", deliveryMode === "delivery" ? postalCode : "", totalCents, totalCents, dueDate || null),
     ...validItems.map((item) => env.DB.prepare("INSERT INTO order_items (order_id, product_id, product_name, unit_price_cents, quantity, size, color) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, item.productId, item.name, item.unitPriceCents, item.quantity, item.size, item.color)),
   ];
   try {

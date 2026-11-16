@@ -12,6 +12,11 @@ export type LocalOrder = {
   dueDate?: string;
   payments?: LocalPayment[];
   items?: Array<{ productName: string; quantity: number; size: string; color: string; unitPriceCents?: number }>;
+  deliveryMode?: "delivery" | "pickup";
+  address?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
 };
 
 export type LocalPayment = {
