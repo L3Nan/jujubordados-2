@@ -149,6 +149,10 @@ export default function Storefront() {
   const [orderConfirmation, setOrderConfirmation] = useState("");
 
   useEffect(() => {
+    void fetch("/api/store/metrics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "visit" }), keepalive: true }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     void fetch("/api/store/catalog", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) return;
@@ -337,6 +341,7 @@ export default function Storefront() {
       const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) });
       if (!response.ok) throw new Error("order_rejected");
       const result = await response.json() as { id?: string };
+      if (whatsappHref) void fetch("/api/store/metrics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "whatsapp_click" }), keepalive: true }).catch(() => {});
       if (whatsappHref && whatsappWindow) {
         whatsappWindow.opener = null;
         whatsappWindow.location.href = whatsappHref;

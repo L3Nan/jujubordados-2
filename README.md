@@ -51,3 +51,5 @@ Fotos enviadas pelo painel são convertidas para WebP e armazenadas separadament
 A vitrine também pode ser instalada como PWA em dispositivos compatíveis; o painel informa como adicionar à tela inicial no iOS e Android.
 
 O painel gera QR Codes localmente para a vitrine, produtos publicados e categorias, com download PNG e impressão.
+
+Métricas da vitrine são contagens agregadas por dia em America/Sao_Paulo: cada abertura, cada pedido salvo e cada tentativa de saída ao WhatsApp. Não são armazenados IP, identificadores de visitante ou cookies analíticos. O painel protegido exibe períodos de 7 e 30 dias.

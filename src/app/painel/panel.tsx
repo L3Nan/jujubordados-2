@@ -8,10 +8,11 @@ import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getS
 import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, saveOperations, subscribeToOperations, type FinanceEntry, type LocalCoupon, type LocalCustomer, type LocalOrder, type LocalQuote, type LocalShippingRule, type OrderStatus, type QuoteStatus } from "@/data/store-operations";
 import PwaInstall from "../pwa-install";
 import ShareQr from "../share-qr";
+import StoreMetrics from "./metrics";
 
-type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "finance";
+type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "metrics" | "finance";
 
-const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "finance"];
+const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "metrics", "finance"];
 
 async function compressProductPhoto(file: File): Promise<Blob> {
   if (!file.type.startsWith("image/")) throw new Error(`${file.name}: selecione um arquivo de imagem.`);
@@ -478,11 +479,12 @@ export default function AdminPanel() {
         <a className={`admin-side-link ${section === "quotes" ? "active" : ""}`} href="#quotes">▧ <span>Orçamentos</span></a>
         <a className={`admin-side-link ${section === "coupons" ? "active" : ""}`} href="#coupons">% <span>Cupons</span></a>
         <a className={`admin-side-link ${section === "shipping" ? "active" : ""}`} href="#shipping">⌖ <span>Entrega e frete</span></a>
+        <a className={`admin-side-link ${section === "metrics" ? "active" : ""}`} href="#metrics">▥ <span>Métricas</span></a>
         <a className={`admin-side-link ${section === "finance" ? "active" : ""}`} href="#finance" onClick={openFinance}>◷ <span>Financeiro</span></a>
         <div className="admin-side-bottom"><span className="admin-avatar">J</span><span><strong>Jujubordados</strong><small>{isProduction ? "Painel sincronizado" : "Modo demonstração"}</small></span></div>
       </aside>
       <section className="admin-main">
-        <header className="admin-topbar"><span className="admin-breadcrumb">Painel <span>/</span> {section === "overview" ? "Visão geral" : section === "catalog" ? "Catálogo" : section === "categories" ? "Categorias" : section === "orders" ? "Pedidos" : section === "customers" ? "Clientes" : section === "quotes" ? "Orçamentos" : section === "coupons" ? "Cupons" : section === "shipping" ? "Entrega e frete" : "Financeiro"}</span><nav className="admin-topnav" aria-label="Seções do painel">{([ ["overview", "Início"], ["catalog", "Catálogo"], ["categories", "Categorias"], ["orders", "Pedidos"], ["customers", "Clientes"], ["quotes", "Orçamentos"], ["coupons", "Cupons"], ["shipping", "Entrega"], ["finance", "Financeiro"] ] as const).map(([key, label]) => <a key={key} className={section === key ? "active" : ""} href={`#${key}`} aria-current={section === key ? "page" : undefined} onClick={key === "finance" ? openFinance : undefined}>{label}</a>)}</nav><Link href="/" className="admin-store-link">Ver vitrine ↗</Link></header>
+        <header className="admin-topbar"><span className="admin-breadcrumb">Painel <span>/</span> {section === "overview" ? "Visão geral" : section === "catalog" ? "Catálogo" : section === "categories" ? "Categorias" : section === "orders" ? "Pedidos" : section === "customers" ? "Clientes" : section === "quotes" ? "Orçamentos" : section === "coupons" ? "Cupons" : section === "shipping" ? "Entrega e frete" : section === "metrics" ? "Métricas" : "Financeiro"}</span><nav className="admin-topnav" aria-label="Seções do painel">{([ ["overview", "Início"], ["catalog", "Catálogo"], ["categories", "Categorias"], ["orders", "Pedidos"], ["customers", "Clientes"], ["quotes", "Orçamentos"], ["coupons", "Cupons"], ["shipping", "Entrega"], ["metrics", "Métricas"], ["finance", "Financeiro"] ] as const).map(([key, label]) => <a key={key} className={section === key ? "active" : ""} href={`#${key}`} aria-current={section === key ? "page" : undefined} onClick={key === "finance" ? openFinance : undefined}>{label}</a>)}</nav><Link href="/" className="admin-store-link">Ver vitrine ↗</Link></header>
         <div className="admin-content">
           {!isProduction && <div className="admin-demo-banner"><span>◉</span><div><strong>Painel de demonstração local</strong><p>Suas edições ficam apenas neste navegador. Ainda não há login, sincronização entre dispositivos ou banco de dados.</p></div><button type="button" onClick={resetCatalog}>Restaurar catálogo original</button></div>}
           {section === "overview" && <>
@@ -493,6 +495,7 @@ export default function AdminPanel() {
           <div className="admin-shortcuts"><a href="#orders">＋ Registrar pedido manual <span>→</span></a><a href="#customers">＋ Cadastrar cliente <span>→</span></a><a href="#catalog">◈ Gerenciar catálogo <span>→</span></a><a href="#categories">▦ Categorias e subcategorias <span>→</span></a><a href="#quotes">▧ Criar orçamento <span>→</span></a><a href="#coupons">% Gerenciar cupons <span>→</span></a></div>
           <section className="admin-next"><span>RECEBIMENTOS E COBRANÇAS</span><p>Registre cada parcela no pedido. O recebimento também entra no caixa; pedidos cancelados não compõem o saldo a receber. {isProduction ? "Os dados são sincronizados com o banco da loja." : "As informações desta demonstração ficam somente neste navegador."}</p></section>
           </>}
+          {section === "metrics" && <StoreMetrics />}
           {section === "catalog" && <section className="admin-catalog" id="catalog"><div className="admin-section-head"><div><p className="eyebrow">PRODUTOS DA LOJA</p><h2>Seu catálogo</h2><p>Edite nome, categoria, preço inicial e descrição. Não adicionamos dados que não estão no site.</p><p className="admin-muted">Adicione até 5 fotos por produto; em produção, as imagens otimizadas são guardadas no banco compartilhado.</p></div><label className="admin-search">⌕ <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar produto" /></label></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
             <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>PRODUTO</th><th>CATEGORIA</th><th>PREÇO INICIAL</th><th>DISPONIBILIDADE</th><th>ESTOQUE</th><th>DESTAQUE</th><th>STATUS</th></tr></thead><tbody>{filtered.map((product) => <tr key={product.id}>
