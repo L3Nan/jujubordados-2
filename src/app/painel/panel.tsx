@@ -11,7 +11,7 @@ type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customer
 
 const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "finance"];
 
-async function compressProductPhoto(file: File): Promise<string> {
+async function compressProductPhoto(file: File): Promise<Blob> {
   if (!file.type.startsWith("image/")) throw new Error(`${file.name}: selecione um arquivo de imagem.`);
   if (file.size > 12 * 1024 * 1024) throw new Error(`${file.name}: o arquivo deve ter até 12 MB.`);
   const bitmap = await createImageBitmap(file);
@@ -26,12 +26,7 @@ async function compressProductPhoto(file: File): Promise<string> {
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
   if (!blob) throw new Error(`${file.name}: não foi possível processar a foto.`);
   if (blob.size > 400 * 1024) throw new Error(`${file.name}: após otimização, a foto ainda excede 400 KB. Use uma imagem menor.`);
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`${file.name}: erro ao ler a foto.`));
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(`${file.name}: formato de foto inválido.`));
-    reader.readAsDataURL(blob);
-  });
+  return blob;
 }
 
 function getSectionSnapshot(): PanelSection {
@@ -230,13 +225,18 @@ export default function AdminPanel() {
     const accepted = files.slice(0, Math.max(0, 5 - current.length));
     if (!accepted.length) { setNotice("Cada produto aceita até 5 fotos. Remova uma antes de adicionar outra."); return; }
     try {
-      const added = await Promise.all(accepted.map(compressProductPhoto));
+      const compressed = await Promise.all(accepted.map(compressProductPhoto));
+      const added = await Promise.all(compressed.map(async (blob, index) => {
+        const form = new FormData();
+        form.set("image", blob, `${accepted[index].name.replace(/\.[^.]+$/, "")}.webp`);
+        const response = await fetch("/api/admin/assets", { method: "POST", body: form });
+        if (!response.ok) throw new Error(`${accepted[index].name}: falha ao enviar a foto para o armazenamento da loja.`);
+        const result = await response.json() as { src?: string };
+        if (!result.src) throw new Error(`${accepted[index].name}: endereço de imagem inválido.`);
+        return result.src;
+      }));
       const images = [...current, ...added];
       const nextCatalog = catalog.map((item) => item.id === id ? { ...item, image: images[0], images } : item);
-      if (JSON.stringify(nextCatalog).length * 2 > 4.3 * 1024 * 1024) {
-        setNotice("O armazenamento local está quase cheio. Remova fotos antigas antes de adicionar estas.");
-        return;
-      }
       const persisted = saveCatalog(nextCatalog);
       setNotice(persisted ? files.length > accepted.length ? `Adicionadas ${added.length} fotos. O limite é 5 por produto.` : `${added.length} fotos otimizadas. Sincronizando o catálogo com a loja.` : "Fotos exibidas nesta sessão, mas o navegador não conseguiu salvá-las. Libere espaço no armazenamento local e tente novamente.");
     } catch (error) {
