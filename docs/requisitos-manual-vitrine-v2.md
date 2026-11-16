@@ -42,7 +42,7 @@
 | 22. QR Code e compartilhamento | QR/link de loja, produto e categoria | Implementado | QR PNG e impressão são gerados no cliente para a loja e itens/categorias publicados. |
 | 23. Instalar aplicativo | PWA para iOS, Android e desktop | Parcial | Manifest, ícones, prompt e service worker existem. Instalação depende do navegador/dispositivo; ainda não há funcionamento offline completo. |
 | 24. Calendário | Eventos, datas, campanhas e aniversários | Parcial | Eventos manuais, aniversários e sugestões sazonais nacionais existem. Falta integração de lembretes/notificações e cobertura de calendário local. |
-| 25. Configurações e suporte | Conta/loja, endereço, integrações, ajuda e exclusão | Pendente | Há acesso ao painel e logout. Não há uma área completa de conta/suporte, redefinição da senha administrativa no app ou fluxo para exportar/excluir dados da titular/cliente. |
+| 25. Configurações e suporte | Conta/loja, endereço, integrações, ajuda e exclusão | Parcial | Painel permite baixar backup JSON autenticado de configurações, catálogo, pedidos, recebimentos, financeiro, estoque e métricas. Fotos e inscrições push são excluídas do arquivo; restauração automatizada, redefinição de senha, suporte e fluxo de exclusão ainda pendentes. |
 | 26. Tabela de planos | Comparação de planos da plataforma de referência | Fora do escopo atual | O manual descreve planos/licenciamento da Vitrine Lucrativa. A Jujubordados atual é uma loja única, sem assinaturas; SaaS/plano seria decisão futura separada, não copiar a oferta do produto de referência. |
 | 27. Solução de problemas | Ajuda para login, pedidos, catálogo e notificações | Pendente | Não há central de ajuda nem página de diagnóstico/autossuporte identificada. |
 
@@ -53,7 +53,7 @@ Estes itens são adaptações ou extensões, não requisitos exclusivos do manua
 ## Prioridade recomendada
 
 1. **Confiabilidade operacional:** pedidos manuais associam itens e atualizam estoque na mesma transação; pagamentos e receitas agora são gravados juntos no D1 e evitam repetição por reenvio da mesma tentativa.
-2. **Conta e privacidade:** definir o modelo de usuários da loja, contato de recuperação, e-mail/domínio, aviso de privacidade e exportação/exclusão de dados.
+2. **Conta e privacidade:** definir o modelo de usuários da loja, contato de recuperação, e-mail/domínio, aviso de privacidade, restauração de backup e fluxo de exclusão de dados.
 3. **Finalização da vitrine:** editor de aparência/conteúdo, opções de pagamento, destaque ordenável e prazo de frete.
 4. **Documentos comerciais:** orçamento com múltiplos itens, edição e conversão fiel, além de PDF do pedido e etiqueta de endereçamento. Etiqueta oficial/rastreio depende de integração de frete.
 5. **Serviços externos opcionais:** validar SuperFrete e InfinitePay com contas/credenciais da proprietária; escolher provedor e custos antes da vendedora IA.
