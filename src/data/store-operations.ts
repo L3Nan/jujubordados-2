@@ -25,6 +25,17 @@ export type LocalCustomer = {
   phone: string;
   email: string;
   notes: string;
+  birthday?: string;
+};
+
+export type CalendarCategory = "Campanha" | "Evento" | "Data importante";
+
+export type LocalCalendarEvent = {
+  id: string;
+  title: string;
+  date: string;
+  category: CalendarCategory;
+  notes: string;
 };
 
 export type FinanceEntry = {
@@ -71,10 +82,10 @@ export type LocalShippingRule = {
   active: boolean;
 };
 
-export type Operations = { orders: LocalOrder[]; customers: LocalCustomer[]; financeEntries: FinanceEntry[]; monthlyGoalCents: number; quotes: LocalQuote[]; coupons: LocalCoupon[]; shippingRules: LocalShippingRule[] };
+export type Operations = { orders: LocalOrder[]; customers: LocalCustomer[]; financeEntries: FinanceEntry[]; monthlyGoalCents: number; quotes: LocalQuote[]; coupons: LocalCoupon[]; shippingRules: LocalShippingRule[]; calendarEvents: LocalCalendarEvent[] };
 
 const STORAGE_KEY = "jujubordados:operations:v1";
-export const EMPTY_OPERATIONS: Operations = { orders: [], customers: [], financeEntries: [], monthlyGoalCents: 0, quotes: [], coupons: [], shippingRules: [] };
+export const EMPTY_OPERATIONS: Operations = { orders: [], customers: [], financeEntries: [], monthlyGoalCents: 0, quotes: [], coupons: [], shippingRules: [], calendarEvents: [] };
 const EMPTY = EMPTY_OPERATIONS;
 let snapshot = JSON.stringify(EMPTY);
 const listeners = new Set<() => void>();
@@ -109,7 +120,7 @@ export function parseOperations(value: string): Operations {
     const parsed: unknown = JSON.parse(value);
     if (typeof parsed === "object" && parsed !== null && "orders" in parsed && "customers" in parsed && Array.isArray(parsed.orders) && Array.isArray(parsed.customers)) {
       const old = parsed as Partial<Operations>;
-      return { orders: old.orders ?? [], customers: old.customers ?? [], financeEntries: old.financeEntries ?? [], monthlyGoalCents: old.monthlyGoalCents ?? 0, quotes: old.quotes ?? [], coupons: old.coupons ?? [], shippingRules: old.shippingRules ?? [] };
+      return { orders: old.orders ?? [], customers: old.customers ?? [], financeEntries: old.financeEntries ?? [], monthlyGoalCents: old.monthlyGoalCents ?? 0, quotes: old.quotes ?? [], coupons: old.coupons ?? [], shippingRules: old.shippingRules ?? [], calendarEvents: old.calendarEvents ?? [] };
     }
   } catch { /* Use an empty local workspace if stored JSON is invalid. */ }
   return EMPTY;
