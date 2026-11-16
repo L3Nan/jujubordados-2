@@ -9,6 +9,7 @@ import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, sa
 import PwaInstall from "../pwa-install";
 import ShareQr from "../share-qr";
 import StoreMetrics from "./metrics";
+import CalendarSuggestions from "./calendar-suggestions";
 
 type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "metrics" | "calendar" | "finance";
 
@@ -347,6 +348,13 @@ export default function AdminPanel() {
     setNotice("Data removida do calendário."); window.setTimeout(() => setNotice(""), 3000);
   }
 
+  function addSeasonalSuggestion(suggestion: { title: string; date: string }) {
+    if (operations.calendarEvents.some((item) => item.title === suggestion.title && item.date === suggestion.date)) return;
+    const event = { id: `EVT-${crypto.randomUUID()}`, title: suggestion.title, date: suggestion.date, category: "Campanha" as const, notes: "Sugestão sazonal nacional; confirme se faz sentido para a loja." };
+    saveOperations({ ...operations, calendarEvents: [event, ...operations.calendarEvents] });
+    setNotice("Sugestão adicionada à agenda. Revise o planejamento e os prazos da loja."); window.setTimeout(() => setNotice(""), 3500);
+  }
+
   function changeOrderStatus(id: string, status: OrderStatus) {
     saveOperations({ ...operations, orders: operations.orders.map((order) => order.id === id ? { ...order, status } : order) });
   }
@@ -520,6 +528,7 @@ export default function AdminPanel() {
           {section === "calendar" && <section className="admin-catalog store-calendar" id="calendar"><div className="admin-section-head"><div><p className="eyebrow">PLANEJAMENTO DA LOJA</p><h2>Calendário e datas importantes</h2><p>Organize campanhas, feiras, bazares e outras datas da Jujubordados.</p></div></div>
             <form className="admin-form-grid calendar-form" onSubmit={createCalendarEvent}><label>Nome da data<input required maxLength={120} value={calendarTitle} onChange={(event) => setCalendarTitle(event.target.value)} placeholder="Ex.: Feira de artesanato" /></label><label>Data<input required type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} /></label><label>Categoria<select value={calendarCategory} onChange={(event) => setCalendarCategory(event.target.value as CalendarCategory)}><option>Data importante</option><option>Campanha</option><option>Evento</option></select></label><label>Observações<input maxLength={2000} value={calendarNotes} onChange={(event) => setCalendarNotes(event.target.value)} placeholder="Planejamento e lembretes" /></label><button className="button button-dark" type="submit">Adicionar data</button></form>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
+            <CalendarSuggestions today={today} events={operations.calendarEvents} onAdd={addSeasonalSuggestion} />
             <div className="calendar-columns"><section aria-labelledby="calendar-upcoming-title"><h3 id="calendar-upcoming-title">Próximas datas</h3>{operations.calendarEvents.filter((item) => !today || item.date >= today).sort((a, b) => a.date.localeCompare(b.date)).length ? <div className="calendar-event-list">{operations.calendarEvents.filter((item) => !today || item.date >= today).sort((a, b) => a.date.localeCompare(b.date)).map((item) => <article className="calendar-event-card" key={item.id}><div><time dateTime={item.date}>{new Date(`${item.date}T12:00:00Z`).toLocaleDateString("pt-BR", { dateStyle: "medium", timeZone: "UTC" })}</time><span>{item.category}</span></div><h4>{item.title}</h4>{item.notes && <p>{item.notes}</p>}<button type="button" onClick={() => deleteCalendarEvent(item.id)}>Remover data</button></article>)}</div> : <p className="admin-muted">Nenhuma data futura cadastrada.</p>}</section>
               <section aria-labelledby="calendar-past-title"><h3 id="calendar-past-title">Datas passadas</h3>{operations.calendarEvents.filter((item) => today && item.date < today).sort((a, b) => b.date.localeCompare(a.date)).length ? <div className="calendar-event-list">{operations.calendarEvents.filter((item) => today && item.date < today).sort((a, b) => b.date.localeCompare(a.date)).map((item) => <article className="calendar-event-card past" key={item.id}><div><time dateTime={item.date}>{new Date(`${item.date}T12:00:00Z`).toLocaleDateString("pt-BR", { dateStyle: "medium", timeZone: "UTC" })}</time><span>{item.category}</span></div><h4>{item.title}</h4>{item.notes && <p>{item.notes}</p>}<button type="button" onClick={() => deleteCalendarEvent(item.id)}>Remover data</button></article>)}</div> : <p className="admin-muted">As datas encerradas aparecerão aqui.</p>}</section></div>
             <section className="calendar-birthdays" aria-labelledby="birthday-title"><h3 id="birthday-title">Aniversários das clientes</h3>{operations.customers.filter((customer) => customer.birthday).length ? <ul>{operations.customers.filter((customer) => customer.birthday).sort((a, b) => (a.birthday ?? "").slice(5).localeCompare((b.birthday ?? "").slice(5))).map((customer) => <li key={customer.id}><strong>{customer.name}</strong><time dateTime={customer.birthday}>{new Date(`${customer.birthday}T12:00:00Z`).toLocaleDateString("pt-BR", { day: "numeric", month: "long", timeZone: "UTC" })}</time></li>)}</ul> : <p className="admin-muted">Cadastre a data de aniversário no perfil da cliente para incluí-la nesta lista. Use esse dado apenas com autorização da cliente.</p>}</section>

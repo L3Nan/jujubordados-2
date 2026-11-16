@@ -55,3 +55,5 @@ O painel gera QR Codes localmente para a vitrine, produtos publicados e categori
 Métricas da vitrine são contagens agregadas por dia em America/Sao_Paulo: cada abertura, cada pedido salvo e cada tentativa de saída ao WhatsApp. Não são armazenados IP, identificadores de visitante ou cookies analíticos. O painel protegido exibe períodos de 7 e 30 dias.
 
 O painel tem calendário de campanhas e eventos e permite registrar aniversários de clientes (com autorização). Os registros ficam junto aos dados operacionais protegidos no D1.
+
+O calendário mostra sugestões sazonais nacionais para os próximos 12 meses, calculadas por regras recorrentes e adicionadas somente por escolha da proprietária. As fontes dos Correios e Sebrae de 2026 aparecem junto às sugestões; feriados locais precisam ser conferidos.
