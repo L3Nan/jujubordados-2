@@ -50,6 +50,12 @@ export type FinanceEntry = {
 
 export type QuoteStatus = "Em aberto" | "Aprovado" | "Recusado" | "Convertido em pedido";
 
+export type LocalQuoteItem = {
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+};
+
 export type LocalQuote = {
   id: string;
   customerName: string;
@@ -60,6 +66,8 @@ export type LocalQuote = {
   validUntil: string;
   deliveryDate: string;
   depositCents: number;
+  /** New multi-item format; absent for quotes saved by earlier versions. */
+  items?: LocalQuoteItem[];
   notes: string;
   status: QuoteStatus;
   createdAt: string;

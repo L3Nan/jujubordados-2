@@ -5,13 +5,22 @@ import Image from "next/image";
 import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { formatPrice, products as initialProducts, type StoreProduct } from "@/data/catalog";
 import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getServerCategorySnapshot, parseCategories, saveCatalog, saveCategories, subscribeToCatalog, subscribeToCategories } from "@/data/store-catalog";
-import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, saveOperations, subscribeToOperations, type CalendarCategory, type FinanceEntry, type LocalCoupon, type LocalCustomer, type LocalOrder, type LocalQuote, type LocalShippingRule, type OrderStatus, type QuoteStatus } from "@/data/store-operations";
+import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, saveOperations, subscribeToOperations, type CalendarCategory, type FinanceEntry, type LocalCoupon, type LocalCustomer, type LocalOrder, type LocalQuote, type LocalQuoteItem, type LocalShippingRule, type OrderStatus, type QuoteStatus } from "@/data/store-operations";
 import PwaInstall from "../pwa-install";
 import ShareQr from "../share-qr";
 import StoreMetrics from "./metrics";
 import CalendarSuggestions from "./calendar-suggestions";
 
 type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "metrics" | "calendar" | "finance";
+type QuoteItemDraft = { description: string; quantity: string; unitPrice: string };
+
+function quoteLineItems(quote: LocalQuote): LocalQuoteItem[] {
+  return quote.items?.length ? quote.items : [{ description: quote.itemDescription, quantity: quote.quantity, unitPriceCents: quote.unitPriceCents }];
+}
+
+function quoteTotalCents(quote: LocalQuote) {
+  return quoteLineItems(quote).reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
+}
 
 const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "metrics", "calendar", "finance"];
 
@@ -93,9 +102,8 @@ export default function AdminPanel() {
   const [goalAmount, setGoalAmount] = useState("");
   const [quoteName, setQuoteName] = useState("");
   const [quotePhone, setQuotePhone] = useState("");
-  const [quoteItem, setQuoteItem] = useState("");
-  const [quoteQuantity, setQuoteQuantity] = useState("1");
-  const [quotePrice, setQuotePrice] = useState("");
+  const [quoteItems, setQuoteItems] = useState<QuoteItemDraft[]>([{ description: "", quantity: "1", unitPrice: "" }]);
+  const [editingQuoteId, setEditingQuoteId] = useState("");
   const [quoteValidUntil, setQuoteValidUntil] = useState("");
   const [quoteDeliveryDate, setQuoteDeliveryDate] = useState("");
   const [quoteDeposit, setQuoteDeposit] = useState("");
@@ -406,17 +414,37 @@ export default function AdminPanel() {
 
   function createQuote(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const quantity = Math.floor(Number(quoteQuantity));
-    const unitPriceCents = Math.round(Number(quotePrice.replace(",", ".")) * 100);
-    const totalCents = quantity * unitPriceCents;
+    const items = quoteItems.map((item) => ({ description: item.description.trim(), quantity: Number(item.quantity), unitPriceCents: Math.round(Number(item.unitPrice.replace(",", ".")) * 100) }));
+    const totalCents = items.reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
     const depositPercent = Number(quoteDeposit.replace(",", ".")) || 0;
-    if (!quoteName.trim() || !quoteItem.trim() || quantity < 1 || !Number.isFinite(totalCents) || totalCents <= 0 || depositPercent < 0 || depositPercent > 100) return;
-    const quote: LocalQuote = { id: `ORC-${Date.now().toString().slice(-6)}`, customerName: quoteName.trim(), customerPhone: quotePhone.trim(), itemDescription: quoteItem.trim(), quantity, unitPriceCents, validUntil: quoteValidUntil, deliveryDate: quoteDeliveryDate, depositCents: Math.round(totalCents * depositPercent / 100), notes: quoteNotes.trim(), status: "Em aberto", createdAt: new Date().toISOString() };
+    if (!quoteName.trim() || !items.length || items.length > 30 || items.some((item) => !item.description || item.description.length > 250 || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 10000 || !Number.isSafeInteger(item.unitPriceCents) || item.unitPriceCents < 1 || item.unitPriceCents > 100_000_000) || !Number.isSafeInteger(totalCents) || totalCents <= 0 || depositPercent < 0 || depositPercent > 100) {
+      setNotice("Confira nome, itens, quantidades e valores. Cada orçamento aceita até 30 itens.");
+      return;
+    }
+    const firstItem = items[0];
+    const quote: LocalQuote = { id: editingQuoteId || `ORC-${crypto.randomUUID()}`, customerName: quoteName.trim(), customerPhone: quotePhone.trim(), itemDescription: firstItem.description, quantity: firstItem.quantity, unitPriceCents: firstItem.unitPriceCents, items, validUntil: quoteValidUntil, deliveryDate: quoteDeliveryDate, depositCents: Math.round(totalCents * depositPercent / 100), notes: quoteNotes.trim(), status: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.status ?? "Em aberto" : "Em aberto", createdAt: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.createdAt ?? new Date().toISOString() : new Date().toISOString() };
     const customerExists = quotePhone.trim() && operations.customers.some((customer) => customer.phone.replace(/\D/g, "") === quotePhone.replace(/\D/g, ""));
-    const customer = customerExists || !quotePhone.trim() ? [] : [{ id: `CLI-${Date.now().toString().slice(-6)}`, name: quoteName.trim(), phone: quotePhone.trim(), email: "", notes: "" }];
-    saveOperations({ ...operations, quotes: [quote, ...operations.quotes], customers: [...customer, ...operations.customers] });
-    setQuoteName(""); setQuotePhone(""); setQuoteItem(""); setQuoteQuantity("1"); setQuotePrice(""); setQuoteValidUntil(""); setQuoteDeliveryDate(""); setQuoteDeposit(""); setQuoteNotes("");
-    setNotice("Orçamento salvo. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
+    const customer = editingQuoteId || customerExists || !quotePhone.trim() ? [] : [{ id: `CLI-${crypto.randomUUID()}`, name: quoteName.trim(), phone: quotePhone.trim(), email: "", notes: "" }];
+    saveOperations({ ...operations, quotes: editingQuoteId ? operations.quotes.map((item) => item.id === editingQuoteId ? quote : item) : [quote, ...operations.quotes], customers: [...customer, ...operations.customers] });
+    resetQuoteDraft();
+    setNotice(editingQuoteId ? "Orçamento atualizado." : "Orçamento salvo."); window.setTimeout(() => setNotice(""), 3000);
+  }
+
+  function resetQuoteDraft() {
+    setEditingQuoteId(""); setQuoteName(""); setQuotePhone(""); setQuoteItems([{ description: "", quantity: "1", unitPrice: "" }]); setQuoteValidUntil(""); setQuoteDeliveryDate(""); setQuoteDeposit(""); setQuoteNotes("");
+  }
+
+  function editQuote(quote: LocalQuote) {
+    if (quote.status !== "Em aberto") return;
+    setEditingQuoteId(quote.id);
+    setQuoteName(quote.customerName);
+    setQuotePhone(quote.customerPhone);
+    setQuoteItems(quoteLineItems(quote).map((item) => ({ description: item.description, quantity: String(item.quantity), unitPrice: (item.unitPriceCents / 100).toFixed(2).replace(".", ",") })));
+    setQuoteValidUntil(quote.validUntil);
+    setQuoteDeliveryDate(quote.deliveryDate);
+    setQuoteDeposit(quoteTotalCents(quote) ? String(Math.round(quote.depositCents / quoteTotalCents(quote) * 10000) / 100).replace(".", ",") : "");
+    setQuoteNotes(quote.notes);
+    document.getElementById("quotes")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function updateQuoteStatus(event: React.ChangeEvent<HTMLSelectElement>) {
@@ -424,7 +452,8 @@ export default function AdminPanel() {
     const status = event.currentTarget.value as QuoteStatus;
     if (!quote) return;
     if (status === "Convertido em pedido" && quote.status !== "Convertido em pedido") {
-      const order: LocalOrder = { id: `PED-${Date.now().toString().slice(-6)}`, customerName: quote.customerName, customerPhone: quote.customerPhone, description: `${quote.quantity}x ${quote.itemDescription}`, totalCents: quote.quantity * quote.unitPriceCents, status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString() };
+      const items = quoteLineItems(quote);
+      const order: LocalOrder = { id: `PED-${crypto.randomUUID()}`, customerName: quote.customerName, customerPhone: quote.customerPhone, description: items.map((item) => `${item.quantity}x ${item.description} · ${formatPrice(item.unitPriceCents)} cada · ${formatPrice(item.quantity * item.unitPriceCents)}`).join("\n"), totalCents: quoteTotalCents(quote), status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString() };
       saveOperations({ ...operations, orders: [order, ...operations.orders], quotes: operations.quotes.map((item) => item.id === quote.id ? { ...item, status } : item) });
     } else saveOperations({ ...operations, quotes: operations.quotes.map((item) => item.id === quote.id ? { ...item, status } : item) });
     setNotice(status === "Convertido em pedido" ? "Orçamento convertido em pedido." : "Status do orçamento atualizado."); window.setTimeout(() => setNotice(""), 3000);
@@ -433,6 +462,22 @@ export default function AdminPanel() {
   function printQuote(id: string) {
     setPrintingQuoteId(id);
     window.setTimeout(() => { window.print(); window.setTimeout(() => setPrintingQuoteId(""), 500); }, 100);
+  }
+
+  function sendQuoteToWhatsApp(quote: LocalQuote) {
+    const items = quoteLineItems(quote);
+    const total = quoteTotalCents(quote);
+    const message = [
+      `Olá, ${quote.customerName}! Segue o orçamento da Jujubordados:`,
+      ...items.map((item) => `${item.quantity}x ${item.description} - ${formatPrice(item.unitPriceCents)} cada (${formatPrice(item.quantity * item.unitPriceCents)})`),
+      `Total: ${formatPrice(total)}`,
+      quote.depositCents > 0 ? `Sinal: ${formatPrice(quote.depositCents)} · Saldo: ${formatPrice(Math.max(0, total - quote.depositCents))}` : "",
+      quote.validUntil ? `Válido até: ${new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : "",
+      quote.deliveryDate ? `Entrega prevista: ${new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : "",
+      quote.notes ? `Observações: ${quote.notes}` : "",
+    ].filter(Boolean).join("\n");
+    const phone = quote.customerPhone.replace(/\D/g, "");
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
   }
 
   function deleteQuote(id: string) {
@@ -566,8 +611,17 @@ export default function AdminPanel() {
           </section>}
           {section === "quotes" && <section className="admin-catalog" id="quotes"><div className="admin-section-head"><div><p className="eyebrow">PROPOSTAS PERSONALIZADAS</p><h2>Orçamentos</h2><p>Monte uma proposta com validade, entrega prevista e sinal opcional. Use Imprimir para salvar como PDF.</p></div></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
-            <form className="admin-form-grid quote-form" onSubmit={createQuote}><label>Nome da cliente<input required value={quoteName} onChange={(event) => setQuoteName(event.target.value)} /></label><label>WhatsApp (opcional)<input inputMode="tel" value={quotePhone} onChange={(event) => setQuotePhone(event.target.value)} /></label><label>Item ou serviço<input required value={quoteItem} onChange={(event) => setQuoteItem(event.target.value)} /></label><label>Quantidade<input required type="number" min="1" step="1" value={quoteQuantity} onChange={(event) => setQuoteQuantity(event.target.value)} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={quotePrice} onChange={(event) => setQuotePrice(event.target.value)} /></label><label>Sinal (%)<input inputMode="decimal" min="0" max="100" placeholder="Opcional" value={quoteDeposit} onChange={(event) => setQuoteDeposit(event.target.value)} /></label><label>Validade até<input required type="date" value={quoteValidUntil} onChange={(event) => setQuoteValidUntil(event.target.value)} /></label><label>Entrega prevista<input required type="date" value={quoteDeliveryDate} onChange={(event) => setQuoteDeliveryDate(event.target.value)} /></label><label className="quote-notes-field">Observações<textarea rows={2} value={quoteNotes} onChange={(event) => setQuoteNotes(event.target.value)} /></label><button className="button button-dark" type="submit">Salvar orçamento</button></form>
-            {!operations.quotes.length ? <div className="admin-empty-state"><span>▧</span><h3>Nenhum orçamento salvo</h3><p>Os orçamentos ficam neste navegador. A impressão usa a opção de impressão do dispositivo, onde você pode escolher salvar como PDF.</p></div> : <div className="quote-list">{operations.quotes.map((quote) => { const total = quote.quantity * quote.unitPriceCents; const remaining = Math.max(0, total - quote.depositCents); return <article key={quote.id} className={`quote-card ${printingQuoteId === quote.id ? "print-selected" : ""}`}><div className="quote-card-head"><div><span className="quote-id">{quote.id}</span><h3>{quote.customerName}</h3><small>{new Date(quote.createdAt).toLocaleDateString("pt-BR")}</small></div><span className={`quote-status ${quote.status === "Aprovado" ? "approved" : ""}`}>{quote.status}</span></div><div className="quote-card-body"><div className="quote-line"><span>{quote.quantity} × {quote.itemDescription}</span><strong>{formatPrice(total)}</strong></div><div className="quote-detail-row"><span>Valor unitário</span><span>{formatPrice(quote.unitPriceCents)}</span></div>{quote.depositCents > 0 && <><div className="quote-detail-row"><span>Sinal</span><span>{formatPrice(quote.depositCents)}</span></div><div className="quote-detail-row"><span>Saldo restante</span><span>{formatPrice(remaining)}</span></div></>}{quote.validUntil && <div className="quote-detail-row"><span>Validade</span><span>{new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.deliveryDate && <div className="quote-detail-row"><span>Entrega prevista</span><span>{new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.notes && <p className="quote-notes">{quote.notes}</p>}</div><div className="quote-card-actions"><label className="quote-status-control">Status<select aria-label={`Status do orçamento ${quote.id}`} data-quote-id={quote.id} value={quote.status} disabled={quote.status === "Convertido em pedido"} onChange={updateQuoteStatus}>{["Em aberto", "Aprovado", "Recusado", "Convertido em pedido"].map((status) => <option key={status}>{status}</option>)}</select></label><button type="button" onClick={() => printQuote(quote.id)}>Imprimir / PDF</button>{confirmQuoteDeleteId === quote.id ? <span className="quote-delete-confirm">Remover este orçamento?<button type="button" onClick={() => confirmDeleteQuote(quote.id)}>Confirmar</button><button type="button" onClick={() => setConfirmQuoteDeleteId("")}>Cancelar</button></span> : <button type="button" onClick={() => deleteQuote(quote.id)}>Excluir</button>}</div></article>; })}</div>}
+            <form className="admin-form-grid quote-form" onSubmit={createQuote}>
+              <label>Nome da cliente<input required maxLength={120} value={quoteName} onChange={(event) => setQuoteName(event.target.value)} /></label>
+              <label>WhatsApp (opcional)<input inputMode="tel" maxLength={40} value={quotePhone} onChange={(event) => setQuotePhone(event.target.value)} /></label>
+              <fieldset className="quote-items-field"><legend>Itens do orçamento</legend>{quoteItems.map((item, index) => <div className="quote-item-draft" key={index}><label>Produto ou serviço<input required maxLength={250} value={item.description} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value } : row))} /></label><label>Quantidade<input required type="number" min="1" max="10000" step="1" value={item.quantity} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row))} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={item.unitPrice} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, unitPrice: event.target.value } : row))} /></label><button className="quote-remove-item" type="button" disabled={quoteItems.length === 1} onClick={() => setQuoteItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remover item</button></div>)}<button className="quote-add-item" type="button" disabled={quoteItems.length >= 30} onClick={() => setQuoteItems((current) => [...current, { description: "", quantity: "1", unitPrice: "" }])}>＋ Adicionar item</button></fieldset>
+              <label>Sinal solicitado (%)<input inputMode="decimal" min="0" max="100" placeholder="Opcional" value={quoteDeposit} onChange={(event) => setQuoteDeposit(event.target.value)} /></label>
+              <label>Validade até<input required type="date" value={quoteValidUntil} onChange={(event) => setQuoteValidUntil(event.target.value)} /></label>
+              <label>Entrega prevista<input required type="date" value={quoteDeliveryDate} onChange={(event) => setQuoteDeliveryDate(event.target.value)} /></label>
+              <label className="quote-notes-field">Observações<textarea rows={2} maxLength={2000} value={quoteNotes} onChange={(event) => setQuoteNotes(event.target.value)} /></label>
+              <div className="quote-form-actions"><button className="button button-dark" type="submit">{editingQuoteId ? "Salvar alterações" : "Salvar orçamento"}</button>{editingQuoteId && <button className="quote-cancel-edit" type="button" onClick={resetQuoteDraft}>Cancelar edição</button>}</div>
+            </form>
+            {!operations.quotes.length ? <div className="admin-empty-state"><span>▧</span><h3>Nenhum orçamento salvo</h3><p>Os orçamentos são sincronizados com a loja. Use Imprimir / PDF para salvar uma cópia pelo dispositivo.</p></div> : <div className="quote-list">{operations.quotes.map((quote) => { const items = quoteLineItems(quote); const total = quoteTotalCents(quote); const remaining = Math.max(0, total - quote.depositCents); return <article key={quote.id} className={`quote-card ${printingQuoteId === quote.id ? "print-selected" : ""}`}><div className="quote-card-head"><div><span className="quote-id">{quote.id}</span><h3>{quote.customerName}</h3><small>{new Date(quote.createdAt).toLocaleDateString("pt-BR")}</small></div><span className={`quote-status ${quote.status === "Aprovado" ? "approved" : ""}`}>{quote.status}</span></div><div className="quote-card-body">{items.map((item, index) => <div className="quote-line" key={`${quote.id}-item-${index}`}><span>{item.quantity} × {item.description}<small className="quote-unit-price">{formatPrice(item.unitPriceCents)} cada</small></span><strong>{formatPrice(item.quantity * item.unitPriceCents)}</strong></div>)}<div className="quote-detail-row quote-total-row"><strong>Total</strong><strong>{formatPrice(total)}</strong></div>{quote.depositCents > 0 && <><div className="quote-detail-row"><span>Sinal solicitado</span><span>{formatPrice(quote.depositCents)}</span></div><div className="quote-detail-row"><span>Saldo restante</span><span>{formatPrice(remaining)}</span></div></>}{quote.validUntil && <div className="quote-detail-row"><span>Validade</span><span>{new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.deliveryDate && <div className="quote-detail-row"><span>Entrega prevista</span><span>{new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.notes && <p className="quote-notes">{quote.notes}</p>}</div><div className="quote-card-actions"><label className="quote-status-control">Status<select aria-label={`Status do orçamento ${quote.id}`} data-quote-id={quote.id} value={quote.status} disabled={quote.status === "Convertido em pedido"} onChange={updateQuoteStatus}>{["Em aberto", "Aprovado", "Recusado", "Convertido em pedido"].map((status) => <option key={status}>{status}</option>)}</select></label>{quote.status === "Em aberto" && <button type="button" onClick={() => editQuote(quote)}>Editar</button>}<button type="button" onClick={() => sendQuoteToWhatsApp(quote)}>WhatsApp</button><button type="button" onClick={() => printQuote(quote.id)}>Imprimir / PDF</button>{confirmQuoteDeleteId === quote.id ? <span className="quote-delete-confirm">Remover este orçamento?<button type="button" onClick={() => confirmDeleteQuote(quote.id)}>Confirmar</button><button type="button" onClick={() => setConfirmQuoteDeleteId("")}>Cancelar</button></span> : <button type="button" onClick={() => deleteQuote(quote.id)}>Excluir</button>}</div></article>; })}</div>}
           </section>}
           {section === "coupons" && <section className="admin-catalog" id="coupons"><div className="admin-section-head"><div><p className="eyebrow">PROMOÇÕES DA VITRINE</p><h2>Cupons de desconto</h2><p>Cupons ativos podem ser aplicados na sacola e sincronizam com a vitrine.</p></div></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}

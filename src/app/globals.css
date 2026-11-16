@@ -372,6 +372,18 @@ a { color: inherit; text-decoration: none; }
 .finance-income { color: #637153; }
 .finance-expense { color: #9b6c62; }
 .quote-form { margin-bottom: 16px; }
+.quote-items-field { grid-column: 1 / -1; display: grid; gap: 12px; margin: 0; padding: 15px; border: 1px solid #e3ddd2; }
+.quote-items-field legend { padding: 0 6px; color: #655d52; font-size: 10px; }
+.quote-item-draft { display: grid; grid-template-columns: minmax(0, 2fr) minmax(90px, .6fr) minmax(120px, .9fr) auto; align-items: end; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid #eee8df; }
+.quote-item-draft label { display: grid; gap: 6px; color: #655d52; font-size: 10px; }
+.quote-item-draft input { min-height: 36px; width: 100%; padding: 8px 10px; border: 1px solid #e3ddd2; background: #fffefa; color: #403c34; font: inherit; font-size: 11px; }
+.quote-remove-item,.quote-add-item,.quote-cancel-edit { min-height: 34px; padding: 7px 10px; border: 1px solid #ddcec1; background: #fffefa; color: #8b6253; font: inherit; font-size: 10px; cursor: pointer; }
+.quote-remove-item:disabled,.quote-add-item:disabled { opacity: .5; cursor: not-allowed; }
+.quote-add-item { justify-self: start; }
+.quote-form-actions { display: flex; align-items: center; gap: 9px; }
+.quote-unit-price { display: block; margin-top: 4px; color: #918a7e; font-size: 9px; }
+.quote-total-row { padding-top: 10px; border-top: 1px solid #eee8df; }
+@media (max-width: 700px) { .quote-item-draft { grid-template-columns: minmax(0, 1fr) minmax(75px, .4fr); } .quote-item-draft label:first-child { grid-column: 1 / -1; } .quote-remove-item { justify-self: start; } }
 .quote-notes-field { grid-column: 1 / -1; }
 .quote-notes-field textarea { width: 100%; padding: 9px 10px; border: 1px solid #e3ddd2; background: #fffefa; color: #403c34; font: inherit; font-size: 10px; resize: vertical; }
 .quote-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
