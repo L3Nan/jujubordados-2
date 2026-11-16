@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { formatPrice, products as initialProducts, storeProfile, type StoreProduct } from "@/data/catalog";
-import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getServerCategorySnapshot, parseCategories, subscribeToCatalog, subscribeToCategories } from "@/data/store-catalog";
+import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getServerCategorySnapshot, parseCategories, saveCatalog, saveCategories, subscribeToCatalog, subscribeToCategories } from "@/data/store-catalog";
 import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, subscribeToOperations } from "@/data/store-operations";
 
 type CartLine = {
@@ -147,6 +147,18 @@ export default function Storefront() {
   const [customerCep, setCustomerCep] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
   const [orderConfirmation, setOrderConfirmation] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    void fetch("/api/store/catalog", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) return;
+      const data = await response.json() as { products?: unknown; categories?: unknown };
+      if (!mounted || !Array.isArray(data.products) || !Array.isArray(data.categories)) return;
+      saveCatalog(data.products as StoreProduct[]);
+      saveCategories(data.categories as ReturnType<typeof parseCategories>);
+    }).catch(() => { /* Keep the bundled catalog if the shared database is temporarily unavailable. */ });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     if (selectedProduct) productDialog.current?.showModal();

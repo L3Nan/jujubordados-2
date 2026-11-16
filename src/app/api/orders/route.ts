@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { randomUUID } from "node:crypto";
-import { products as catalog } from "@/data/catalog";
+import { products as initialCatalog, type StoreProduct } from "@/data/catalog";
 
 export const runtime = "edge";
 
@@ -47,6 +47,14 @@ export async function POST(request: Request) {
 
   if (!customerName || !/^\+?[\d\s().-]{8,32}$/.test(customerPhone) || !deliveryMode || subtotalCents === null || discountCents === null || totalCents === null || (input.shippingCents !== null && shippingCents === null) || items.length < 1 || items.length > 30) {
     return Response.json({ error: "invalid_order" }, { status: 400 });
+  }
+
+  let catalog: StoreProduct[] = initialCatalog;
+  try {
+    const storedCatalog = await env.DB.prepare("SELECT setting_value FROM store_settings WHERE setting_key = 'catalog'").first<{ setting_value: string }>();
+    if (storedCatalog) catalog = JSON.parse(storedCatalog.setting_value) as StoreProduct[];
+  } catch {
+    return Response.json({ error: "catalog_unavailable" }, { status: 503 });
   }
 
   const parsedItems = items.map((item) => {
