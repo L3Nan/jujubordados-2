@@ -11,6 +11,7 @@ export type LocalOrder = {
   paymentStatus: "Pendente" | "Parcial" | "Pago";
   dueDate?: string;
   payments?: LocalPayment[];
+  items?: Array<{ productName: string; quantity: number; size: string; color: string; unitPriceCents?: number }>;
 };
 
 export type LocalPayment = {

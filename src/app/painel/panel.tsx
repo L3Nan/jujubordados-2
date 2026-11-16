@@ -150,6 +150,86 @@ async function buildQuotePdf(quote: LocalQuote) {
   return await document.save();
 }
 
+async function buildOrderPdf(order: LocalOrder) {
+  const { PDFDocument, StandardFonts, rgb, PageSizes } = await import("pdf-lib");
+  const document = await PDFDocument.create();
+  document.setTitle(`Pedido ${order.id} - Jujubordados`);
+  document.setSubject(`Resumo comercial do pedido de ${order.customerName}`);
+  document.setCreator("Jujubordados");
+  const regular = await document.embedFont(StandardFonts.Helvetica);
+  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const pageWidth = PageSizes.A4[0];
+  const pageHeight = PageSizes.A4[1];
+  const ink = rgb(0.25, 0.22, 0.20);
+  const muted = rgb(0.47, 0.43, 0.41);
+  const rose = rgb(0.61, 0.25, 0.32);
+  const pale = rgb(0.98, 0.96, 0.94);
+  const pages: ReturnType<typeof document.addPage>[] = [];
+  let page = document.addPage(PageSizes.A4);
+  pages.push(page);
+  const drawHeader = (continuation = false) => {
+    page.drawText("JUJUBORDADOS", { x: 48, y: pageHeight - 46, size: 12, font: bold, color: rose });
+    page.drawText(continuation ? "RESUMO DO PEDIDO · CONTINUAÇÃO" : "DOCUMENTO COMERCIAL", { x: 48, y: pageHeight - 70, size: 9, font: regular, color: muted });
+    page.drawLine({ start: { x: 48, y: pageHeight - 82 }, end: { x: pageWidth - 48, y: pageHeight - 82 }, thickness: 1, color: rose });
+    if (!continuation) {
+      page.drawText("PEDIDO", { x: 48, y: pageHeight - 126, size: 24, font: bold, color: ink });
+      page.drawText(pdfSafeText(order.id), { x: pageWidth - 170, y: pageHeight - 119, size: 10, font: bold, color: rose });
+      page.drawText(`Cliente: ${pdfSafeText(order.customerName)}`, { x: 48, y: pageHeight - 157, size: 11, font: bold, color: ink });
+      if (order.customerPhone) page.drawText(`WhatsApp: ${pdfSafeText(order.customerPhone)}`, { x: 48, y: pageHeight - 175, size: 9, font: regular, color: muted });
+      page.drawText(`Registrado em ${new Date(order.createdAt).toLocaleDateString("pt-BR")} · Status: ${pdfSafeText(order.status)}`, { x: 48, y: pageHeight - 193, size: 9, font: regular, color: muted });
+    }
+  };
+  drawHeader();
+  let cursorY = pageHeight - 230;
+  const lines = order.items?.length ? order.items.map((item) => `${item.quantity}× ${item.productName}${item.size ? ` · ${item.size}` : ""}${item.color ? ` · ${item.color}` : ""}${item.unitPriceCents !== undefined ? ` · ${formatPrice(item.unitPriceCents)} cada` : ""}`) : order.description.split(/\n|,\s*/).filter(Boolean);
+  for (const description of lines) {
+    const wrapped = wrapPdfText(description, regular, 10, pageWidth - 112);
+    const rowHeight = Math.max(28, wrapped.length * 14 + 12);
+    if (cursorY - rowHeight < 132) {
+      page = document.addPage(PageSizes.A4);
+      pages.push(page);
+      drawHeader(true);
+      cursorY = pageHeight - 112;
+    }
+    page.drawRectangle({ x: 48, y: cursorY - rowHeight + 7, width: pageWidth - 96, height: rowHeight, color: pale, opacity: 0.55 });
+    page.drawText(wrapped.join("\n"), { x: 60, y: cursorY - 12, size: 10, lineHeight: 14, font: regular, color: ink, maxWidth: pageWidth - 120 });
+    cursorY -= rowHeight + 8;
+  }
+  if (cursorY < 160) {
+    page = document.addPage(PageSizes.A4);
+    pages.push(page);
+    drawHeader(true);
+    cursorY = pageHeight - 112;
+  }
+  cursorY -= 8;
+  page.drawLine({ start: { x: 48, y: cursorY }, end: { x: pageWidth - 48, y: cursorY }, thickness: 1, color: rose });
+  cursorY -= 23;
+  const paidCents = (order.payments ?? []).reduce((sum, payment) => sum + payment.amountCents, 0);
+  const summary = [["Total do pedido", formatPrice(order.totalCents)], ["Recebido", formatPrice(paidCents)], ["Saldo", formatPrice(Math.max(0, order.totalCents - paidCents))], ["Pagamento", order.paymentStatus], ...(order.dueDate ? [["Vencimento", new Date(`${order.dueDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })]] : [])];
+  for (const [label, value] of summary) {
+    if (cursorY < 76) { page = document.addPage(PageSizes.A4); pages.push(page); drawHeader(true); cursorY = pageHeight - 112; }
+    page.drawText(label, { x: 330, y: cursorY, size: label === "Total do pedido" ? 11 : 9, font: label === "Total do pedido" ? bold : regular, color: muted });
+    page.drawText(pdfSafeText(value), { x: 536 - regular.widthOfTextAtSize(pdfSafeText(value), 10), y: cursorY, size: 10, font: bold, color: ink });
+    cursorY -= 19;
+  }
+  if (order.payments?.length) {
+    cursorY -= 10;
+    page.drawText("HISTÓRICO DE RECEBIMENTOS", { x: 48, y: cursorY, size: 8, font: bold, color: rose });
+    cursorY -= 16;
+    for (const payment of order.payments) {
+      if (cursorY < 76) { page = document.addPage(PageSizes.A4); pages.push(page); drawHeader(true); cursorY = pageHeight - 112; }
+      page.drawText(`${formatPrice(payment.amountCents)} · ${new Date(payment.receivedAt).toLocaleDateString("pt-BR")}`, { x: 48, y: cursorY, size: 9, font: regular, color: muted });
+      cursorY -= 15;
+    }
+  }
+  pages.forEach((orderPage, index) => {
+    orderPage.drawLine({ start: { x: 48, y: 48 }, end: { x: pageWidth - 48, y: 48 }, thickness: 0.5, color: pale });
+    orderPage.drawText("Jujubordados · Resumo comercial", { x: 48, y: 33, size: 8, font: regular, color: muted });
+    orderPage.drawText(`${index + 1} / ${pages.length}`, { x: pageWidth - 75, y: 33, size: 8, font: regular, color: muted });
+  });
+  return await document.save();
+}
+
 const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "metrics", "calendar", "finance"];
 
 async function compressProductPhoto(file: File): Promise<Blob> {
@@ -216,6 +296,7 @@ export default function AdminPanel() {
   const [orderItems, setOrderItems] = useState<ManualOrderItemDraft[]>([{ description: "", quantity: "1", unitPrice: "" }]);
   const [savingManualOrder, setSavingManualOrder] = useState(false);
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
+  const [exportingOrderId, setExportingOrderId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
@@ -665,6 +746,23 @@ export default function AdminPanel() {
     }
   }
 
+  async function downloadOrderPdf(order: LocalOrder) {
+    setExportingOrderId(order.id);
+    try {
+      const bytes = await buildOrderPdf(order);
+      const pdfBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      const blob = new Blob([pdfBuffer], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `pedido-${order.id.slice(0, 36)}.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("PDF do pedido gerado no dispositivo.");
+    } catch { setNotice("Não foi possível gerar o PDF do pedido neste dispositivo."); }
+    finally { setExportingOrderId(""); window.setTimeout(() => setNotice(""), 3500); }
+  }
+
   function sendQuoteToWhatsApp(quote: LocalQuote) {
     const items = quoteLineItems(quote);
     const total = quoteTotalCents(quote);
@@ -802,7 +900,7 @@ export default function AdminPanel() {
           {section === "orders" && <section className="admin-catalog" id="orders"><div className="admin-section-head"><div><p className="eyebrow">ACOMPANHAMENTO DA LOJA</p><h2>Pedidos</h2><p>Registre pedidos manuais e acompanhe cada etapa.</p></div><button className="button button-dark admin-add-button" type="button" onClick={() => setShowNewOrder(!showNewOrder)}>{showNewOrder ? "Fechar formulário" : "+ Novo pedido"}</button></div>
             {showNewOrder && <form className="admin-form-grid manual-order-form" onSubmit={createOrder}><label className="manual-customer-picker">Cliente cadastrada (opcional)<select value={orderCustomerId} onChange={(event) => { const id = event.target.value; const customer = operations.customers.find((item) => item.id === id); setOrderCustomerId(id); setOrderName(customer?.name ?? ""); setOrderPhone(customer?.phone ?? ""); }}><option value="">Nova cliente / preencher manualmente</option>{operations.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></label><label>Nome da cliente<input required maxLength={120} value={orderName} readOnly={Boolean(orderCustomerId)} onChange={(event) => setOrderName(event.target.value)} /></label><label>WhatsApp (opcional)<input inputMode="tel" maxLength={40} value={orderPhone} readOnly={Boolean(orderCustomerId)} onChange={(event) => setOrderPhone(event.target.value)} /></label><fieldset className="manual-order-items"><legend>Itens do pedido</legend>{orderItems.map((item, index) => { const selectedValue = item.productId ? `${item.productId}::${encodeURIComponent(item.variantLabel ?? "")}` : ""; const selectableProducts = catalog.filter((product) => product.isActive !== false); const selectedProduct = item.productId ? catalog.find((product) => product.id === item.productId) : undefined; return <div className="manual-order-item" key={index}><label>Escolher do catálogo<select value={selectedValue} onChange={(event) => updateManualOrderCatalogItem(index, event.target.value)}><option value="">Serviço / item avulso</option>{selectedProduct && (selectedProduct.isActive === false || !selectedProduct.sizes.some((option) => option.label === item.variantLabel)) && <option value={selectedValue}>Item indisponível · {item.description}</option>}{selectableProducts.flatMap((product) => product.sizes.map((option) => <option key={`${product.id}-${option.label}`} value={`${product.id}::${encodeURIComponent(option.label)}`}>{product.name} · {option.label} · {formatPrice(option.priceCents)}</option>))}</select></label><label>Descrição<input required maxLength={250} value={item.description} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value, productId: undefined, variantLabel: undefined, color: undefined } : row))} /></label>{item.productId && (catalog.find((product) => product.id === item.productId)?.colors.length ?? 0) > 0 && <label>Cor<select value={item.color ?? ""} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, color: event.target.value } : row))}>{catalog.find((product) => product.id === item.productId)?.colors.map((color) => <option key={color}>{color}</option>)}</select></label>}<label>Quantidade<input required type="number" min="1" max="10000" step="1" value={item.quantity} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row))} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={item.unitPrice} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, unitPrice: event.target.value, productId: undefined, variantLabel: undefined, color: undefined } : row))} /></label><button className="quote-remove-item" type="button" disabled={orderItems.length === 1} onClick={() => setOrderItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remover item</button></div>; })}<button className="quote-add-item" type="button" disabled={orderItems.length >= 30} onClick={() => setOrderItems((current) => [...current, { description: "", quantity: "1", unitPrice: "" }])}>＋ Adicionar item</button></fieldset><label>Vencimento (opcional)<input name="dueDate" type="date" /></label><button className="button button-dark" type="submit" disabled={savingManualOrder}>{savingManualOrder ? "Salvando pedido…" : "Salvar pedido"}</button></form>}
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
-            {!operations.orders.length ? <div className="admin-empty-state"><span>✳</span><h3>Nenhum pedido registrado</h3><p>Os pedidos finalizados na vitrine ainda são enviados pelo WhatsApp. Você pode registrar um pedido manual para experimentar o acompanhamento.</p><button type="button" onClick={() => setShowNewOrder(true)}>Registrar pedido de demonstração</button></div> : <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>PEDIDO</th><th>CLIENTE</th><th>ITENS</th><th>VALOR E RECEBIMENTOS</th><th>STATUS</th></tr></thead><tbody>{operations.orders.map((order) => { const payments = order.payments ?? []; const paidCents = payments.reduce((sum, payment) => sum + payment.amountCents, 0); const balanceCents = Math.max(0, order.totalCents - paidCents); return <tr key={order.id}><td><strong>{order.id}</strong><small className="admin-muted">{new Date(order.createdAt).toLocaleDateString("pt-BR")}</small></td><td>{order.customerName}<small className="admin-muted">{order.customerPhone || "Sem telefone informado"}</small></td><td>{order.description}</td><td><div className="order-balance-summary"><strong>Total: {formatPrice(order.totalCents)}</strong><span>Recebido: {formatPrice(paidCents)}</span><span>Saldo: {formatPrice(balanceCents)}</span>{order.dueDate && <small>Vencimento: {new Date(`${order.dueDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}{order.dueDate < today && balanceCents > 0 ? " · Vencido" : ""}</small>}</div>{payments.length > 0 && <details className="order-payment-history"><summary>{payments.length} recebimento(s)</summary><ul>{payments.map((payment) => <li key={payment.id}>{formatPrice(payment.amountCents)} · {new Date(payment.receivedAt).toLocaleDateString("pt-BR")}</li>)}</ul></details>}{balanceCents > 0 && order.status !== "Cancelado" && <form className="order-payment-form" onSubmit={(event) => recordOrderPayment(event, order.id)}><label htmlFor={`receipt-${order.id}`}>Novo recebimento</label><div><input id={`receipt-${order.id}`} type="text" inputMode="decimal" placeholder="0,00" value={paymentAmounts[order.id] ?? ""} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [order.id]: event.target.value }))} /><button type="submit">Registrar</button></div></form>}<small className="admin-muted">Pagamento {order.paymentStatus.toLowerCase()}</small></td><td><select aria-label={`Status do pedido ${order.id}`} className="admin-input" value={order.status} onChange={(event) => changeOrderStatus(order.id, event.target.value as OrderStatus)}>{["Novo", "Em produção", "Pronto", "Concluído", "Cancelado"].map((status) => <option key={status}>{status}</option>)}</select></td></tr>; })}</tbody></table></div>}
+            {!operations.orders.length ? <div className="admin-empty-state"><span>✳</span><h3>Nenhum pedido registrado</h3><p>Os pedidos finalizados na vitrine ainda são enviados pelo WhatsApp. Você pode registrar um pedido manual para experimentar o acompanhamento.</p><button type="button" onClick={() => setShowNewOrder(true)}>Registrar pedido de demonstração</button></div> : <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>PEDIDO</th><th>CLIENTE</th><th>ITENS</th><th>VALOR E RECEBIMENTOS</th><th>STATUS</th></tr></thead><tbody>{operations.orders.map((order) => { const payments = order.payments ?? []; const paidCents = payments.reduce((sum, payment) => sum + payment.amountCents, 0); const balanceCents = Math.max(0, order.totalCents - paidCents); return <tr key={order.id}><td><strong>{order.id}</strong><small className="admin-muted">{new Date(order.createdAt).toLocaleDateString("pt-BR")}</small></td><td>{order.customerName}<small className="admin-muted">{order.customerPhone || "Sem telefone informado"}</small></td><td>{order.description}</td><td><div className="order-balance-summary"><strong>Total: {formatPrice(order.totalCents)}</strong><span>Recebido: {formatPrice(paidCents)}</span><span>Saldo: {formatPrice(balanceCents)}</span>{order.dueDate && <small>Vencimento: {new Date(`${order.dueDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}{order.dueDate < today && balanceCents > 0 ? " · Vencido" : ""}</small>}<button type="button" disabled={exportingOrderId === order.id} onClick={() => void downloadOrderPdf(order)}>{exportingOrderId === order.id ? "Gerando PDF…" : "Baixar pedido em PDF"}</button></div>{payments.length > 0 && <details className="order-payment-history"><summary>{payments.length} recebimento(s)</summary><ul>{payments.map((payment) => <li key={payment.id}>{formatPrice(payment.amountCents)} · {new Date(payment.receivedAt).toLocaleDateString("pt-BR")}</li>)}</ul></details>}{balanceCents > 0 && order.status !== "Cancelado" && <form className="order-payment-form" onSubmit={(event) => recordOrderPayment(event, order.id)}><label htmlFor={`receipt-${order.id}`}>Novo recebimento</label><div><input id={`receipt-${order.id}`} type="text" inputMode="decimal" placeholder="0,00" value={paymentAmounts[order.id] ?? ""} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [order.id]: event.target.value }))} /><button type="submit">Registrar</button></div></form>}<small className="admin-muted">Pagamento {order.paymentStatus.toLowerCase()}</small></td><td><select aria-label={`Status do pedido ${order.id}`} className="admin-input" value={order.status} onChange={(event) => changeOrderStatus(order.id, event.target.value as OrderStatus)}>{["Novo", "Em produção", "Pronto", "Concluído", "Cancelado"].map((status) => <option key={status}>{status}</option>)}</select></td></tr>; })}</tbody></table></div>}
           </section>}
           {section === "customers" && <section className="admin-catalog" id="customers"><div className="admin-section-head"><div><p className="eyebrow">RELACIONAMENTO</p><h2>Clientes</h2><p>Guarde informações apenas para atendimento e gestão dos pedidos. Registre aniversário somente com autorização da cliente.</p></div></div>
             <form className="admin-form-grid" onSubmit={createCustomer}><label>Nome da cliente<input required value={customerName} onChange={(event) => setCustomerName(event.target.value)} /></label><label>WhatsApp<input inputMode="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} /></label><label>E-mail<input type="email" value={customerEmail} onChange={(event) => setCustomerEmail(event.target.value)} /></label><label>Aniversário<input type="date" value={customerBirthday} onChange={(event) => setCustomerBirthday(event.target.value)} /></label><label>Observações<input value={customerNotes} onChange={(event) => setCustomerNotes(event.target.value)} /></label><button className="button button-dark" type="submit">Salvar cliente</button></form>

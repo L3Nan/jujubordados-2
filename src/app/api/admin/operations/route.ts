@@ -32,14 +32,14 @@ export async function GET(request: Request) {
     const storedOperations = stored ? parseOperations(stored.setting_value) : EMPTY_OPERATIONS;
     const result = await env.DB.prepare(`
       SELECT o.id, o.customer_name, o.customer_phone, o.subtotal_cents, o.total_cents, o.status, o.payment_status, o.due_date, o.created_at,
-        (SELECT json_group_array(json_object('product_name', i.product_name, 'quantity', i.quantity, 'size', i.size, 'color', i.color)) FROM order_items i WHERE i.order_id=o.id) AS items_json,
+        (SELECT json_group_array(json_object('product_name', i.product_name, 'quantity', i.quantity, 'size', i.size, 'color', i.color, 'unit_price_cents', i.unit_price_cents)) FROM order_items i WHERE i.order_id=o.id) AS items_json,
         (SELECT json_group_array(json_object('id', p.id, 'amountCents', p.amount_cents, 'receivedAt', p.received_at)) FROM order_payments p WHERE p.order_id=o.id) AS payments_json
       FROM orders o ORDER BY o.created_at DESC LIMIT 500
     `).all<{ id: string; customer_name: string; customer_phone: string; total_cents: number; status: LocalOrder["status"]; payment_status: LocalOrder["paymentStatus"]; due_date: string | null; created_at: string; items_json: string; payments_json: string }>();
     const webOrders: LocalOrder[] = (result.results ?? []).map((row) => {
-      const items = JSON.parse(row.items_json || "[]") as Array<{ product_name: string; quantity: number; size: string; color: string }>;
+      const items = JSON.parse(row.items_json || "[]") as Array<{ product_name: string; quantity: number; size: string; color: string; unit_price_cents: number }>;
       const payments = JSON.parse(row.payments_json || "[]") as NonNullable<LocalOrder["payments"]>;
-      return { id: row.id, customerName: row.customer_name, customerPhone: row.customer_phone, description: items.map((item) => `${item.quantity}× ${item.product_name}${item.size ? ` · ${item.size}` : ""}${item.color ? ` · ${item.color}` : ""}`).join(", "), totalCents: row.total_cents, status: row.status, paymentStatus: row.payment_status, createdAt: row.created_at, dueDate: row.due_date ?? undefined, payments };
+      return { id: row.id, customerName: row.customer_name, customerPhone: row.customer_phone, description: items.map((item) => `${item.quantity}× ${item.product_name}${item.size ? ` · ${item.size}` : ""}${item.color ? ` · ${item.color}` : ""}`).join(", "), items: items.map((item) => ({ productName: item.product_name, quantity: item.quantity, size: item.size, color: item.color, unitPriceCents: item.unit_price_cents })), totalCents: row.total_cents, status: row.status, paymentStatus: row.payment_status, createdAt: row.created_at, dueDate: row.due_date ?? undefined, payments };
     });
     const webPhones = new Set(webOrders.map((order) => order.customerPhone.replace(/\D/g, "")));
     const webCustomers = webOrders.filter((order, index, list) => list.findIndex((other) => other.customerPhone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "")) === index).map((order) => {
