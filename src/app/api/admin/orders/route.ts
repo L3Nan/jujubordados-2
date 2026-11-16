@@ -1,8 +1,11 @@
 import { env } from "cloudflare:workers";
 import { isAdminSession } from "@/lib/admin-auth";
+import { products as initialCatalog, type StoreProduct } from "@/data/catalog";
 
 const statuses = ["Novo", "Em produção", "Pronto", "Concluído", "Cancelado"] as const;
 type Status = (typeof statuses)[number];
+
+type ManualOrderItemInput = { productId?: unknown; description?: unknown; quantity?: unknown; unitPriceCents?: unknown; variantLabel?: unknown; color?: unknown };
 
 function sameOrigin(request: Request) {
   const origin = request.headers.get("Origin");
@@ -25,6 +28,71 @@ export async function GET(request: Request) {
     return Response.json({ orders }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "orders_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+}
+
+export async function POST(request: Request) {
+  if (!sameOrigin(request)) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!await isAdminSession(request)) return Response.json({ error: "unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+  let body: { customerName?: unknown; customerPhone?: unknown; dueDate?: unknown; items?: unknown };
+  try { body = await request.json() as typeof body; } catch { return Response.json({ error: "invalid_json" }, { status: 400 }); }
+  const customerName = typeof body.customerName === "string" ? body.customerName.trim() : "";
+  const customerPhone = typeof body.customerPhone === "string" ? body.customerPhone.trim() : "";
+  const dueDate = typeof body.dueDate === "string" ? body.dueDate : "";
+  if (!customerName || customerName.length > 120 || customerPhone.length > 40 || (customerPhone && !/^\+?[\d\s().-]{8,40}$/.test(customerPhone)) || (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T12:00:00Z`)) || new Date(`${dueDate}T12:00:00Z`).toISOString().slice(0, 10) !== dueDate)) || !Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) return Response.json({ error: "invalid_manual_order" }, { status: 400 });
+
+  let catalog: StoreProduct[] = initialCatalog;
+  try {
+    const stored = await env.DB.prepare("SELECT setting_value FROM store_settings WHERE setting_key = 'catalog'").first<{ setting_value: string }>();
+    if (stored) catalog = JSON.parse(stored.setting_value) as StoreProduct[];
+  } catch { return Response.json({ error: "catalog_unavailable" }, { status: 503 }); }
+
+  const items = body.items.map((entry) => {
+    if (!entry || typeof entry !== "object") return null;
+    const row = entry as ManualOrderItemInput;
+    const description = typeof row.description === "string" ? row.description.trim() : "";
+    const quantity = row.quantity;
+    if (!description || description.length > 250 || typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 10000) return null;
+    if (row.productId === undefined || row.productId === "") {
+      const unitPriceCents = row.unitPriceCents;
+      if (typeof unitPriceCents !== "number" || !Number.isSafeInteger(unitPriceCents) || unitPriceCents < 1 || unitPriceCents > 100_000_000) return null;
+      return { productId: `manual-${crypto.randomUUID()}`, name: description, quantity, unitPriceCents, size: typeof row.variantLabel === "string" ? row.variantLabel.trim().slice(0, 60) : "", color: typeof row.color === "string" ? row.color.trim().slice(0, 80) : "" };
+    }
+    if (typeof row.productId !== "string" || row.productId.length > 100) return null;
+    const product = catalog.find((item) => item.id === row.productId && item.isActive !== false);
+    const variantLabel = typeof row.variantLabel === "string" ? row.variantLabel.trim() : "";
+    const option = product?.sizes.find((size) => size.label === variantLabel);
+    const color = typeof row.color === "string" ? row.color.trim() : "";
+    if (!product || product.stockQuantity === 0 || !option || (product.colors.length > 0 && !product.colors.includes(color))) return null;
+    return { productId: product.id, name: product.name, quantity, unitPriceCents: option.priceCents, size: variantLabel, color };
+  });
+  if (items.some((item) => item === null)) return Response.json({ error: "invalid_manual_order_items" }, { status: 400 });
+  const validItems = items.filter((item): item is NonNullable<typeof item> => item !== null);
+  const totalCents = validItems.reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
+  if (!Number.isSafeInteger(totalCents) || totalCents <= 0 || totalCents > 1_000_000_000) return Response.json({ error: "invalid_manual_order_total" }, { status: 400 });
+
+  const id = crypto.randomUUID();
+  const statements = [
+    ...catalog.filter((product) => product.stockQuantity !== undefined).map((product) => env.DB.prepare("INSERT OR IGNORE INTO product_inventory (product_id, stock_quantity, low_stock_threshold) VALUES (?, ?, ?)").bind(product.id, product.stockQuantity, product.lowStockThreshold ?? 0)),
+    env.DB.prepare("INSERT INTO orders (id, customer_name, customer_phone, delivery_mode, subtotal_cents, discount_cents, shipping_cents, total_cents, due_date) VALUES (?, ?, ?, 'pickup', ?, 0, 0, ?, ?)").bind(id, customerName, customerPhone, totalCents, totalCents, dueDate || null),
+    ...validItems.map((item) => env.DB.prepare("INSERT INTO order_items (order_id, product_id, product_name, unit_price_cents, quantity, size, color) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, item.productId, item.name, item.unitPriceCents, item.quantity, item.size, item.color)),
+  ];
+  try {
+    await env.DB.batch(statements);
+    return Response.json({ id, totalCents, items: validItems }, { status: 201, headers: { "Cache-Control": "no-store" } });
+  } catch {
+    try {
+      const inventoryItems = validItems.filter((item) => catalog.some((product) => product.id === item.productId && product.stockQuantity !== undefined));
+      const quantities = new Map<string, number>();
+      inventoryItems.forEach((item) => quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity));
+      const ids = [...quantities.keys()];
+      if (ids.length) {
+        const rows = await env.DB.prepare(`SELECT product_id, stock_quantity FROM product_inventory WHERE product_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ product_id: string; stock_quantity: number }>();
+        const available = new Map((rows.results ?? []).map((row) => [row.product_id, row.stock_quantity]));
+        if (ids.some((productId) => (available.get(productId) ?? 0) < (quantities.get(productId) ?? 0))) return Response.json({ error: "out_of_stock" }, { status: 409 });
+      }
+    } catch { /* Keep a generic failure if inventory cannot be read. */ }
+    return Response.json({ error: "manual_order_save_failed" }, { status: 503 });
   }
 }
 

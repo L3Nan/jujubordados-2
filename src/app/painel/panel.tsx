@@ -13,6 +13,7 @@ import CalendarSuggestions from "./calendar-suggestions";
 
 type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "metrics" | "calendar" | "finance";
 type QuoteItemDraft = { description: string; quantity: string; unitPrice: string; productId?: string; variantLabel?: string };
+type ManualOrderItemDraft = QuoteItemDraft & { color?: string };
 
 function quoteLineItems(quote: LocalQuote): LocalQuoteItem[] {
   return quote.items?.length ? quote.items : [{ description: quote.itemDescription, quantity: quote.quantity, unitPriceCents: quote.unitPriceCents }];
@@ -211,8 +212,9 @@ export default function AdminPanel() {
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [orderName, setOrderName] = useState("");
   const [orderPhone, setOrderPhone] = useState("");
-  const [orderDescription, setOrderDescription] = useState("");
-  const [orderTotal, setOrderTotal] = useState("");
+  const [orderCustomerId, setOrderCustomerId] = useState("");
+  const [orderItems, setOrderItems] = useState<ManualOrderItemDraft[]>([{ description: "", quantity: "1", unitPrice: "" }]);
+  const [savingManualOrder, setSavingManualOrder] = useState(false);
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -448,17 +450,46 @@ export default function AdminPanel() {
     saveCatalog(catalog.map((product) => product.id === id ? { ...product, category: parent.name, subcategory } : product));
   }
 
-  function createOrder(event: React.FormEvent<HTMLFormElement>) {
+  async function createOrder(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const dueDate = String(new FormData(event.currentTarget).get("dueDate") ?? "");
-    const amountCents = Math.round(Number(orderTotal.replace(",", ".")) * 100);
-    if (!orderName.trim() || !orderDescription.trim() || !Number.isFinite(amountCents) || amountCents <= 0) return;
-    const customerId = operations.customers.find((customer) => customer.phone.replace(/\D/g, "") === orderPhone.replace(/\D/g, "") && orderPhone.trim())?.id;
-    const order: LocalOrder = { id: `PED-${Date.now().toString().slice(-6)}`, customerName: orderName.trim(), customerPhone: orderPhone.trim(), description: orderDescription.trim(), totalCents: amountCents, status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString(), dueDate: dueDate || undefined, payments: [] };
-    const customers = customerId || !orderPhone.trim() ? operations.customers : [...operations.customers, { id: `CLI-${Date.now().toString().slice(-6)}`, name: orderName.trim(), phone: orderPhone.trim(), email: "", notes: "" }];
-    saveOperations({ ...operations, orders: [order, ...operations.orders], customers });
-    setShowNewOrder(false); setOrderName(""); setOrderPhone(""); setOrderDescription(""); setOrderTotal("");
-    setNotice("Pedido manual registrado. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
+    const items = orderItems.map((item) => ({ description: item.description.trim(), quantity: Number(item.quantity), unitPriceCents: Math.round(Number(item.unitPrice.replace(",", ".")) * 100), ...(item.productId ? { productId: item.productId, variantLabel: item.variantLabel ?? "", color: item.color ?? "" } : {}) }));
+    if (!orderName.trim() || !items.length || items.length > 30 || items.some((item) => !item.description || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 10000 || !Number.isSafeInteger(item.unitPriceCents) || item.unitPriceCents < 1)) {
+      setNotice("Confira cliente, produtos, quantidades e valores do pedido."); return;
+    }
+    setSavingManualOrder(true);
+    try {
+      const response = await fetch("/api/admin/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ customerName: orderName.trim(), customerPhone: orderPhone.trim(), dueDate, items }) });
+      const result = await response.json() as { id?: string; totalCents?: number; items?: Array<{ name: string; quantity: number; unitPriceCents: number; size: string; color: string }>; error?: string };
+      if (!response.ok || !result.id || typeof result.totalCents !== "number" || !Number.isSafeInteger(result.totalCents)) {
+        setNotice(result.error === "out_of_stock" ? "Estoque insuficiente para esse pedido. Confira o catálogo e tente novamente." : result.error === "unauthorized" ? "Sua sessão expirou. Entre novamente no painel." : "Não foi possível registrar o pedido. Confira os dados e tente novamente.");
+        return;
+      }
+      const customer = operations.customers.find((entry) => entry.id === orderCustomerId || (entry.phone.replace(/\D/g, "") === orderPhone.replace(/\D/g, "") && orderPhone.trim()));
+      const savedItems = result.items ?? items.map((item) => ({ name: item.description, quantity: item.quantity, unitPriceCents: item.unitPriceCents, size: item.variantLabel ?? "", color: item.color ?? "" }));
+      const order: LocalOrder = { id: result.id, customerName: orderName.trim(), customerPhone: orderPhone.trim(), description: savedItems.map((item) => `${item.quantity}× ${item.name}${item.size ? ` · ${item.size}` : ""}${item.color ? ` · ${item.color}` : ""} · ${formatPrice(item.unitPriceCents)} cada`).join("\n"), totalCents: result.totalCents, status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString(), dueDate: dueDate || undefined, payments: [] };
+      const newCustomer = customer || !orderPhone.trim() ? [] : [{ id: `CLI-${crypto.randomUUID()}`, name: orderName.trim(), phone: orderPhone.trim(), email: "", notes: "" }];
+      saveOperations({ ...operations, orders: [order, ...operations.orders], customers: [...newCustomer, ...operations.customers] });
+      setShowNewOrder(false); setOrderName(""); setOrderPhone(""); setOrderCustomerId(""); setOrderItems([{ description: "", quantity: "1", unitPrice: "" }]);
+      setNotice("Pedido manual salvo e estoque atualizado."); window.setTimeout(() => setNotice(""), 3000);
+    } catch { setNotice("Falha de conexão ao registrar o pedido. Tente novamente."); }
+    finally { setSavingManualOrder(false); }
+  }
+
+  function updateManualOrderCatalogItem(index: number, value: string) {
+    if (!value) {
+      setOrderItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId: undefined, variantLabel: undefined, color: undefined } : item));
+      return;
+    }
+    const separator = value.indexOf("::");
+    if (separator < 1) return;
+    let variantLabel = "";
+    try { variantLabel = decodeURIComponent(value.slice(separator + 2)); } catch { return; }
+    const productId = value.slice(0, separator);
+    const product = catalog.find((item) => item.id === productId && item.isActive !== false);
+    const option = product?.sizes.find((item) => item.label === variantLabel);
+    if (!product || !option) return;
+    setOrderItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId, variantLabel, description: product.name, unitPrice: (option.priceCents / 100).toFixed(2).replace(".", ","), color: product.colors[0] ?? "" } : item));
   }
 
   function createCustomer(event: React.FormEvent<HTMLFormElement>) {
@@ -769,7 +800,7 @@ export default function AdminPanel() {
             <p className="admin-footnote">Ao excluir uma categoria principal, seus produtos são mantidos no catálogo como “Sem categoria” e as subcategorias também são removidas. Ao excluir uma subcategoria, os produtos continuam na categoria principal.</p>
           </section>}
           {section === "orders" && <section className="admin-catalog" id="orders"><div className="admin-section-head"><div><p className="eyebrow">ACOMPANHAMENTO DA LOJA</p><h2>Pedidos</h2><p>Registre pedidos manuais e acompanhe cada etapa.</p></div><button className="button button-dark admin-add-button" type="button" onClick={() => setShowNewOrder(!showNewOrder)}>{showNewOrder ? "Fechar formulário" : "+ Novo pedido"}</button></div>
-            {showNewOrder && <form className="admin-form-grid" onSubmit={createOrder}><label>Nome da cliente<input required value={orderName} onChange={(event) => setOrderName(event.target.value)} /></label><label>WhatsApp (opcional)<input inputMode="tel" value={orderPhone} onChange={(event) => setOrderPhone(event.target.value)} /></label><label>Itens ou descrição<input required value={orderDescription} onChange={(event) => setOrderDescription(event.target.value)} /></label><label>Valor total (R$)<input required inputMode="decimal" placeholder="0,00" value={orderTotal} onChange={(event) => setOrderTotal(event.target.value)} /></label><label>Vencimento (opcional)<input name="dueDate" type="date" /></label><button className="button button-dark" type="submit">Salvar pedido</button></form>}
+            {showNewOrder && <form className="admin-form-grid manual-order-form" onSubmit={createOrder}><label className="manual-customer-picker">Cliente cadastrada (opcional)<select value={orderCustomerId} onChange={(event) => { const id = event.target.value; const customer = operations.customers.find((item) => item.id === id); setOrderCustomerId(id); setOrderName(customer?.name ?? ""); setOrderPhone(customer?.phone ?? ""); }}><option value="">Nova cliente / preencher manualmente</option>{operations.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></label><label>Nome da cliente<input required maxLength={120} value={orderName} readOnly={Boolean(orderCustomerId)} onChange={(event) => setOrderName(event.target.value)} /></label><label>WhatsApp (opcional)<input inputMode="tel" maxLength={40} value={orderPhone} readOnly={Boolean(orderCustomerId)} onChange={(event) => setOrderPhone(event.target.value)} /></label><fieldset className="manual-order-items"><legend>Itens do pedido</legend>{orderItems.map((item, index) => { const selectedValue = item.productId ? `${item.productId}::${encodeURIComponent(item.variantLabel ?? "")}` : ""; const selectableProducts = catalog.filter((product) => product.isActive !== false); const selectedProduct = item.productId ? catalog.find((product) => product.id === item.productId) : undefined; return <div className="manual-order-item" key={index}><label>Escolher do catálogo<select value={selectedValue} onChange={(event) => updateManualOrderCatalogItem(index, event.target.value)}><option value="">Serviço / item avulso</option>{selectedProduct && (selectedProduct.isActive === false || !selectedProduct.sizes.some((option) => option.label === item.variantLabel)) && <option value={selectedValue}>Item indisponível · {item.description}</option>}{selectableProducts.flatMap((product) => product.sizes.map((option) => <option key={`${product.id}-${option.label}`} value={`${product.id}::${encodeURIComponent(option.label)}`}>{product.name} · {option.label} · {formatPrice(option.priceCents)}</option>))}</select></label><label>Descrição<input required maxLength={250} value={item.description} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value, productId: undefined, variantLabel: undefined, color: undefined } : row))} /></label>{item.productId && (catalog.find((product) => product.id === item.productId)?.colors.length ?? 0) > 0 && <label>Cor<select value={item.color ?? ""} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, color: event.target.value } : row))}>{catalog.find((product) => product.id === item.productId)?.colors.map((color) => <option key={color}>{color}</option>)}</select></label>}<label>Quantidade<input required type="number" min="1" max="10000" step="1" value={item.quantity} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row))} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={item.unitPrice} onChange={(event) => setOrderItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, unitPrice: event.target.value, productId: undefined, variantLabel: undefined, color: undefined } : row))} /></label><button className="quote-remove-item" type="button" disabled={orderItems.length === 1} onClick={() => setOrderItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remover item</button></div>; })}<button className="quote-add-item" type="button" disabled={orderItems.length >= 30} onClick={() => setOrderItems((current) => [...current, { description: "", quantity: "1", unitPrice: "" }])}>＋ Adicionar item</button></fieldset><label>Vencimento (opcional)<input name="dueDate" type="date" /></label><button className="button button-dark" type="submit" disabled={savingManualOrder}>{savingManualOrder ? "Salvando pedido…" : "Salvar pedido"}</button></form>}
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
             {!operations.orders.length ? <div className="admin-empty-state"><span>✳</span><h3>Nenhum pedido registrado</h3><p>Os pedidos finalizados na vitrine ainda são enviados pelo WhatsApp. Você pode registrar um pedido manual para experimentar o acompanhamento.</p><button type="button" onClick={() => setShowNewOrder(true)}>Registrar pedido de demonstração</button></div> : <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>PEDIDO</th><th>CLIENTE</th><th>ITENS</th><th>VALOR E RECEBIMENTOS</th><th>STATUS</th></tr></thead><tbody>{operations.orders.map((order) => { const payments = order.payments ?? []; const paidCents = payments.reduce((sum, payment) => sum + payment.amountCents, 0); const balanceCents = Math.max(0, order.totalCents - paidCents); return <tr key={order.id}><td><strong>{order.id}</strong><small className="admin-muted">{new Date(order.createdAt).toLocaleDateString("pt-BR")}</small></td><td>{order.customerName}<small className="admin-muted">{order.customerPhone || "Sem telefone informado"}</small></td><td>{order.description}</td><td><div className="order-balance-summary"><strong>Total: {formatPrice(order.totalCents)}</strong><span>Recebido: {formatPrice(paidCents)}</span><span>Saldo: {formatPrice(balanceCents)}</span>{order.dueDate && <small>Vencimento: {new Date(`${order.dueDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}{order.dueDate < today && balanceCents > 0 ? " · Vencido" : ""}</small>}</div>{payments.length > 0 && <details className="order-payment-history"><summary>{payments.length} recebimento(s)</summary><ul>{payments.map((payment) => <li key={payment.id}>{formatPrice(payment.amountCents)} · {new Date(payment.receivedAt).toLocaleDateString("pt-BR")}</li>)}</ul></details>}{balanceCents > 0 && order.status !== "Cancelado" && <form className="order-payment-form" onSubmit={(event) => recordOrderPayment(event, order.id)}><label htmlFor={`receipt-${order.id}`}>Novo recebimento</label><div><input id={`receipt-${order.id}`} type="text" inputMode="decimal" placeholder="0,00" value={paymentAmounts[order.id] ?? ""} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [order.id]: event.target.value }))} /><button type="submit">Registrar</button></div></form>}<small className="admin-muted">Pagamento {order.paymentStatus.toLowerCase()}</small></td><td><select aria-label={`Status do pedido ${order.id}`} className="admin-input" value={order.status} onChange={(event) => changeOrderStatus(order.id, event.target.value as OrderStatus)}>{["Novo", "Em produção", "Pronto", "Concluído", "Cancelado"].map((status) => <option key={status}>{status}</option>)}</select></td></tr>; })}</tbody></table></div>}
           </section>}
