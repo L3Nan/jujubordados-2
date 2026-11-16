@@ -51,6 +51,10 @@ export async function PUT(request: Request) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('catalog', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").bind(JSON.stringify(body.products)),
       env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('categories', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").bind(JSON.stringify(body.categories)),
+      ...body.products.map((product) => product.stockQuantity === undefined
+        ? env.DB.prepare("DELETE FROM product_inventory WHERE product_id = ?").bind(product.id)
+        : env.DB.prepare(`INSERT INTO product_inventory (product_id, stock_quantity, low_stock_threshold) VALUES (?, ?, ?)
+          ON CONFLICT(product_id) DO UPDATE SET stock_quantity = excluded.stock_quantity, low_stock_threshold = excluded.low_stock_threshold, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`).bind(product.id, product.stockQuantity, product.lowStockThreshold ?? 0)),
     ]);
     return Response.json({ saved: true }, { headers: { "Cache-Control": "no-store" } });
   } catch {

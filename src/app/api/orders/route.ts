@@ -131,6 +131,7 @@ export async function POST(request: Request) {
 
   const id = randomUUID();
   const statements = [
+    ...catalog.filter((product) => product.stockQuantity !== undefined).map((product) => env.DB.prepare("INSERT OR IGNORE INTO product_inventory (product_id, stock_quantity, low_stock_threshold) VALUES (?, ?, ?)").bind(product.id, product.stockQuantity, product.lowStockThreshold ?? 0)),
     env.DB.prepare("INSERT INTO orders (id, customer_name, customer_phone, delivery_mode, address, city, state, postal_code, subtotal_cents, discount_cents, shipping_cents, total_cents, coupon_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
       id, customerName, customerPhone, deliveryMode, deliveryMode === "delivery" ? text(input.address, 240) : "", deliveryMode === "delivery" ? customerCity : "", deliveryMode === "delivery" ? customerState : "", deliveryMode === "delivery" ? postalCode : "", subtotalCents, discountCents, shippingCents, totalCents, coupon ? coupon.code : null,
     ),
@@ -142,6 +143,20 @@ export async function POST(request: Request) {
     await notifyStoreOwner();
     return Response.json({ id }, { status: 201 });
   } catch {
+    try {
+      const quantities = new Map<string, number>();
+      normalizedItems.forEach((item) => quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity));
+      const ids = [...quantities.keys()];
+      const placeholders = ids.map(() => "?").join(",");
+      const inventory = await env.DB.prepare(`SELECT product_id, stock_quantity FROM product_inventory WHERE product_id IN (${placeholders})`).bind(...ids).all<{ product_id: string; stock_quantity: number }>();
+      const available = new Map((inventory.results ?? []).map((row) => [row.product_id, row.stock_quantity]));
+      const soldOut = ids.some((productId) => {
+        const quantity = quantities.get(productId) ?? 0;
+        const remaining = available.get(productId) ?? catalog.find((product) => product.id === productId)?.stockQuantity;
+        return remaining !== undefined && remaining < quantity;
+      });
+      if (soldOut) return Response.json({ error: "out_of_stock" }, { status: 409 });
+    } catch { /* Return a generic save error when inventory state cannot be checked. */ }
     return Response.json({ error: "order_save_failed" }, { status: 503 });
   }
 }

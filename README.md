@@ -8,6 +8,10 @@ Vitrine responsiva da Jujubordados com catálogo, carrinho, pedidos e painel adm
 - vinext/Vite em Cloudflare Workers.
 - Cloudflare D1 para catálogo, pedidos, pagamentos, clientes, financeiro, orçamentos, cupons e regras de entrega.
 
+## Requisitos e escopo
+
+A matriz de cobertura do manual funcional de referência está em [`docs/requisitos-manual-vitrine-v2.md`](docs/requisitos-manual-vitrine-v2.md). Ela distingue recursos implementados, parciais, pendentes e condicionados a dados ou serviços externos.
+
 ## Desenvolvimento local
 
 ```bash
@@ -25,7 +29,7 @@ As migrações aditivas ficam em `migrations/`. Para aplicar migrações pendent
 npx cf d1 migrations apply d811afc3-f795-4545-a58f-7ad5682a4a17 --dir migrations
 ```
 
-O endpoint público de pedidos valida catálogo, preços, quantidades, descontos e frete no servidor. Cupons e tarifas usados pelo checkout vêm das configurações ativas no banco.
+O endpoint público de pedidos valida catálogo, preços, quantidades, descontos e frete no servidor. Estoque finito é atualizado por triggers D1 dentro da transação do pedido; tentativas simultâneas não vendem além do saldo. Cancelar devolve o estoque e reabrir reserva novamente. Cupons e tarifas usados pelo checkout vêm das configurações ativas no banco.
 
 ## Painel
 

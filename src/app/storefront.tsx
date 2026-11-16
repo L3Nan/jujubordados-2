@@ -339,6 +339,14 @@ export default function Storefront() {
     };
     try {
       const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) });
+      if (response.status === 409) {
+        void fetch("/api/store/catalog", { cache: "no-store" }).then(async (catalogResponse) => {
+          if (!catalogResponse.ok) return;
+          const currentCatalog = await catalogResponse.json() as { products: StoreProduct[] };
+          if (Array.isArray(currentCatalog.products)) saveCatalog(currentCatalog.products);
+        }).catch(() => {});
+        throw new Error("out_of_stock");
+      }
       if (!response.ok) throw new Error("order_rejected");
       const result = await response.json() as { id?: string };
       if (whatsappHref) void fetch("/api/store/metrics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "whatsapp_click" }), keepalive: true }).catch(() => {});
@@ -351,9 +359,9 @@ export default function Storefront() {
       setOrderConfirmation(result.id ? `Pedido ${result.id.slice(0, 8).toUpperCase()} registrado. A loja poderá entrar em contato pelo WhatsApp informado.` : "Pedido registrado com sucesso.");
       updateCart(() => []);
       if (whatsappHref) setCartDialogOpen(false);
-    } catch {
+    } catch (cause) {
       whatsappWindow?.close();
-      setCheckoutError("Não foi possível registrar o pedido agora. Confira sua conexão e tente novamente.");
+      setCheckoutError(cause instanceof Error && cause.message === "out_of_stock" ? "O estoque mudou enquanto você finalizava o pedido. Atualizamos a vitrine; confira as quantidades e tente novamente." : "Não foi possível registrar o pedido agora. Confira sua conexão e tente novamente.");
     }
   }
 
