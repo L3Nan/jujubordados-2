@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 580" fill="none">
+  <defs>
+    <pattern id="cloth" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0 8 8M8 0 0 8" stroke="#d5c8bb" stroke-opacity=".26" stroke-width=".55"/></pattern>
+    <filter id="patchShadow" x="129" y="108" width="471" height="395" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="16"/></filter>
+  </defs>
+  <rect width="720" height="580" rx="24" fill="#eee7dc"/>
+  <path d="M0 424c144-44 219-18 343 30 110 42 215 53 377-11v137H0V424Z" fill="#e5d6c7"/>
+  <rect x="115" y="98" width="490" height="387" rx="20" fill="#67584d" fill-opacity=".16" filter="url(#patchShadow)"/>
+  <rect x="116" y="91" width="488" height="384" rx="20" fill="#faf6ee" stroke="#d9ccbc" stroke-width="4"/>
+  <rect x="137" y="112" width="446" height="342" rx="13" fill="url(#cloth)" stroke="#e8ddcf" stroke-width="2"/>
+  <g transform="rotate(-11 373 283)">
+    <path d="M210 226c0-41 26-66 70-66h180c41 0 66 23 66 62v103c0 40-24 66-66 66H275c-41 0-65-26-65-66V226Z" fill="#a82036" stroke="#7d1528" stroke-width="11"/>
+    <path d="M222 228c0-34 22-54 59-54h176c35 0 56 20 56 52v97c0 33-21 54-56 54H280c-36 0-58-22-58-55v-94Z" stroke="#f7e7cf" stroke-width="8" stroke-dasharray="3 9" stroke-linecap="round"/>
+    <text x="370" y="301" text-anchor="middle" fill="#fff7e9" stroke="#fff7e9" stroke-width="1.6" paint-order="stroke" font-family="Georgia,serif" font-size="54" font-style="italic">Seu nome</text>
+    <path d="M272 320h202" stroke="#fff7e9" stroke-width="5" stroke-dasharray="4 8" stroke-linecap="round" opacity=".86"/>
+  </g>
+  <g transform="translate(537 132)"><circle r="26" fill="#d9b88a"/><path d="M-10-2 0-13l10 11L0 11-10-2Z" fill="#fff7e9"/><circle r="4" fill="#ad8860"/></g>
+  <path d="M137 408c24 13 45 13 70 0m300 0c25 13 47 13 70 0" stroke="#b8a58f" stroke-width="3" stroke-dasharray="3 9" stroke-linecap="round"/>
+</svg>
