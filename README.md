@@ -37,6 +37,8 @@ A senha fica no segredo `ADMIN_PASSWORD` do Worker, não no repositório. Para t
 npx cf workers secrets update ADMIN_PASSWORD --worker jujubordados-2 --type secret_text --text <nova-senha>
 ```
 
+O login limita a cinco tentativas por origem a cada 15 minutos. A D1 guarda apenas um HMAC do IP e remove registros com mais de 24 horas; o endereço IP original não é persistido.
+
 ## Publicação
 
 O Worker usa Cloudflare sem cache extra, Cloudflare Images ou prerender:

@@ -20,6 +20,11 @@ async function sessionKey() {
   return crypto.subtle.importKey("raw", encoder.encode(env.ADMIN_PASSWORD), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
+export async function adminLoginRateLimitKey(ipAddress: string) {
+  const signature = await crypto.subtle.sign("HMAC", await sessionKey(), encoder.encode(`admin-login-rate-limit:${ipAddress}`));
+  return toBase64Url(new Uint8Array(signature));
+}
+
 export async function verifyAdminPassword(candidate: string) {
   const expected = await crypto.subtle.digest("SHA-256", encoder.encode(env.ADMIN_PASSWORD));
   const actual = await crypto.subtle.digest("SHA-256", encoder.encode(candidate));
