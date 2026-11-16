@@ -54,14 +54,17 @@ export async function POST(request: Request) {
     }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     try {
-      const existing = await env.DB.prepare(`SELECT p.order_id, p.amount_cents, p.received_at, f.id AS entry_id, f.category, f.description, f.entry_date
-        FROM order_payments p JOIN finance_entries f ON f.related_payment_id = p.id WHERE p.id = ?`).bind(paymentId)
-        .first<{ order_id: string; amount_cents: number; received_at: string; entry_id: string; category: string; description: string; entry_date: string }>();
+      const existing = await env.DB.prepare(`SELECT p.order_id, p.amount_cents, p.received_at, f.id AS entry_id, f.category, f.description, f.entry_date, o.payment_status, o.total_cents,
+        (SELECT COALESCE(SUM(other.amount_cents), 0) FROM order_payments other WHERE other.order_id = o.id) AS paid_cents
+        FROM order_payments p JOIN finance_entries f ON f.related_payment_id = p.id JOIN orders o ON o.id = p.order_id WHERE p.id = ?`).bind(paymentId)
+        .first<{ order_id: string; amount_cents: number; received_at: string; entry_id: string; category: string; description: string; entry_date: string; payment_status: "Pendente" | "Parcial" | "Pago"; total_cents: number; paid_cents: number }>();
       if (existing && existing.order_id === body.orderId && existing.amount_cents === body.amountCents) {
         return Response.json({
           payment: { id: paymentId, amountCents: existing.amount_cents, receivedAt: existing.received_at },
           entry: { id: existing.entry_id, kind: "income", category: existing.category, description: existing.description, amountCents: existing.amount_cents, date: existing.entry_date, relatedOrderId: existing.order_id },
           idempotent: true,
+          paymentStatus: existing.payment_status,
+          remainingCents: Math.max(0, existing.total_cents - existing.paid_cents),
         }, { headers: { "Cache-Control": "no-store" } });
       }
     } catch { /* Return the transactional write failure below. */ }
