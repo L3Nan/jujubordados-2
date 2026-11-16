@@ -1,12 +1,12 @@
 # Jujubordados 2.0
 
-Vitrine digital da Jujubordados com catálogo responsivo, carrinho e registro de pedidos no Cloudflare D1. A loja usa fotos e informações do catálogo público original; disponibilidade e prazos ainda devem ser confirmados com a loja.
+Vitrine responsiva da Jujubordados com catálogo, carrinho, registro de pedidos e painel protegido para consultar pedidos. As fotos e informações dos produtos foram importadas do catálogo público original; disponibilidade, estoque e prazos devem ser confirmados com a loja.
 
 ## Stack
 
-- Next.js App Router, React e TypeScript para a experiência da loja.
-- vinext/Vite para executar e publicar no Cloudflare Workers.
-- Cloudflare D1 para persistir pedidos e seus itens.
+- Next.js App Router, React e TypeScript.
+- vinext/Vite no Cloudflare Workers.
+- Cloudflare D1 para pedidos e itens.
 
 ## Desenvolvimento local
 
@@ -15,28 +15,36 @@ npm install
 npm run dev
 ```
 
-Crie `.env.local` a partir de `.env.example` e configure o número oficial do WhatsApp com DDI e DDD antes de ativar o envio de pedidos.
+Crie `.env.local` a partir de `.env.example` para informar o número oficial do WhatsApp com DDI e DDD. Sem esse número, o checkout registra o pedido e mostra a confirmação; com ele, também abre a conversa para revisão.
 
 ## D1
 
-Aplique o esquema no banco remoto:
+As migrações ficam em `migrations/`. Para aplicar as pendentes:
 
 ```bash
-npx wrangler d1 migrations apply jujubordados-production --remote
+npx cf d1 migrations apply d811afc3-f795-4545-a58f-7ad5682a4a17 --dir migrations
 ```
 
-As migrações ficam em `migrations/`. O endpoint `POST /api/orders` grava o pedido e os itens no D1 antes de direcionar o cliente ao WhatsApp.
+`POST /api/orders` valida o catálogo, preços, quantidades e totais no servidor antes de gravar o pedido.
+
+## Painel administrativo
+
+Acesse `/painel`. A senha inicial é armazenada como segredo `ADMIN_PASSWORD` no Worker e não está no repositório. Para trocar a senha:
+
+```bash
+npx cf workers secrets update ADMIN_PASSWORD --worker jujubordados-2 --type secret_text --text <nova-senha>
+```
+
+A sessão usa cookie HttpOnly, Secure e SameSite Strict, com validade de 12 horas. A lista e a atualização de status consultam o D1 através de rotas autenticadas.
+
+O painel antigo com cadastro de produtos, categorias, financeiro, orçamentos, cupons e frete continua local e ainda não foi migrado para persistência compartilhada. Não use seus dados como fonte operacional em múltiplos dispositivos até essa etapa ser concluída.
 
 ## Publicação
 
-A aplicação está configurada para Cloudflare Workers com cache, otimização de imagens e prerender desativados. Para publicar:
+A aplicação usa Cloudflare Workers sem cache extra, Cloudflare Images ou prerender:
 
 ```bash
 npm run deploy:vinext
 ```
 
-O binding `DB` é definido em `cloudflare.config.ts`. Não coloque tokens ou segredos no repositório.
-
-## Painel administrativo
-
-O painel existente continua disponível localmente para desenvolvimento. Em produção, `/painel` fica bloqueado enquanto não houver autenticação e persistência administrativa seguras. O conteúdo do painel ainda usa armazenamento local do navegador e não é sincronizado com D1.
+O binding `DB` está em `cloudflare.config.ts`. Não versione tokens, senhas ou dados de clientes.
