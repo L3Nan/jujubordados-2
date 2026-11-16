@@ -626,3 +626,4 @@ a { color: inherit; text-decoration: none; }
   .admin-product-editor-fields label:nth-child(5) { grid-column: auto; }
   .admin-catalog-editor-head { align-items: flex-start; }
 }
+.pwa-install-card{display:flex;align-items:center;justify-content:space-between;gap:24px;margin:22px 0;padding:22px 26px;border:1px solid #eadbd8;border-radius:18px;background:linear-gradient(110deg,#fffaf8,#f8efed)}.pwa-install-card strong{display:block;color:#452f30;font-size:15px}.pwa-install-card p{margin:6px 0 0;color:#766568;font-size:13px;line-height:1.55}.pwa-install-card small{display:block;margin-top:8px;color:#5e7758}@media(max-width:640px){.pwa-install-card{align-items:flex-start;flex-direction:column;gap:12px;padding:18px}.pwa-install-card .button{width:100%;justify-content:center}}

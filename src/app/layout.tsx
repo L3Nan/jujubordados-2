@@ -5,6 +5,8 @@ export const metadata: Metadata = {
   title: "Jujubordados | Cada ponto, um carinho",
   description:
     "Cada ponto, um carinho. Cada bordado, uma história! Encontre bordados personalizados da Jujubordados.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Jujubordados", statusBarStyle: "default" },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

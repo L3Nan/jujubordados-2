@@ -47,3 +47,5 @@ npm run deploy:vinext
 
 O binding `DB` está em `cloudflare.config.ts`. Nunca versione tokens, senhas ou dados de clientes.
 Fotos enviadas pelo painel são convertidas para WebP e armazenadas separadamente no D1; a vitrine as entrega por URLs públicas imutáveis, sem serviço de imagens externo.
+
+A vitrine também pode ser instalada como PWA em dispositivos compatíveis; o painel informa como adicionar à tela inicial no iOS e Android.
