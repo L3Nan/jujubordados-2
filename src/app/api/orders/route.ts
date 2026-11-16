@@ -1,9 +1,37 @@
 import { env } from "cloudflare:workers";
 import { randomUUID } from "node:crypto";
+import { buildPushPayload, type PushSubscription, type VapidKeys } from "@block65/webcrypto-web-push";
 import { products as initialCatalog, type StoreProduct } from "@/data/catalog";
 import { EMPTY_OPERATIONS, parseOperations } from "@/data/store-operations";
 
 export const runtime = "edge";
+
+async function notifyStoreOwner() {
+  const subject = env.VAPID_SUBJECT;
+  const publicKey = env.VAPID_PUBLIC_KEY;
+  const privateKey = env.VAPID_PRIVATE_KEY;
+  if (!subject || !publicKey || !privateKey) return;
+  try {
+    const subscriptions = await env.DB.prepare("SELECT id, subscription_json FROM push_subscriptions").all<{ id: string; subscription_json: string }>();
+    const vapid: VapidKeys = { subject, publicKey, privateKey };
+    const results = await Promise.all((subscriptions.results ?? []).map(async (row) => {
+      try {
+        const subscription = JSON.parse(row.subscription_json) as PushSubscription;
+        const payload = await buildPushPayload({ data: JSON.stringify({ title: "Novo pedido na Jujubordados", body: "Há um pedido aguardando atendimento." }), options: { ttl: 60 } }, subscription, vapid);
+        const response = await fetch(subscription.endpoint, payload);
+        if (response.status === 404 || response.status === 410) return row.id;
+        if (!response.ok) console.error(JSON.stringify({ message: "push delivery failed", status: response.status }));
+      } catch (error) {
+        console.error(JSON.stringify({ message: "push delivery error", error: error instanceof Error ? error.message : String(error) }));
+      }
+      return null;
+    }));
+    const expired = results.filter((id): id is string => id !== null);
+    if (expired.length) await env.DB.batch(expired.map((id) => env.DB.prepare("DELETE FROM push_subscriptions WHERE id = ?").bind(id)));
+  } catch (error) {
+    console.error(JSON.stringify({ message: "push notification task failed", error: error instanceof Error ? error.message : String(error) }));
+  }
+}
 
 type OrderInput = {
   customerName?: unknown;
@@ -29,7 +57,9 @@ function cents(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: Request, context: { waitUntil(promise: Promise<unknown>): void }) {
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== new URL(request.url).origin) return Response.json({ error: "forbidden" }, { status: 403 });
   let input: OrderInput;
   try {
     input = await request.json() as OrderInput;
@@ -109,6 +139,7 @@ export async function POST(request: Request) {
 
   try {
     await env.DB.batch(statements);
+    context.waitUntil(notifyStoreOwner());
     return Response.json({ id }, { status: 201 });
   } catch {
     return Response.json({ error: "order_save_failed" }, { status: 503 });

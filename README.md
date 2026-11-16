@@ -58,4 +58,12 @@ O painel tem calendário de campanhas e eventos e permite registrar aniversário
 
 O calendário mostra sugestões sazonais nacionais para os próximos 12 meses, calculadas por regras recorrentes e adicionadas somente por escolha da proprietária. As fontes dos Correios e Sebrae de 2026 aparecem junto às sugestões; feriados locais precisam ser conferidos.
 
-O painel de pedidos atualiza a lista a cada 30 segundos e pode emitir notificações do navegador após consentimento. Os avisos aparecem enquanto o painel está aberto; push em segundo plano ainda exige configuração de Web Push e chaves VAPID.
+O painel de pedidos atualiza a lista a cada 30 segundos e pode emitir notificações do navegador após consentimento. O Web Push também pode avisar com o painel fechado, após configurar as chaves VAPID no Worker e ativar o dispositivo no painel. Use um contato válido da proprietária como `VAPID_SUBJECT` e mantenha a chave privada exclusivamente como segredo:
+
+```bash
+npx cf workers secrets update VAPID_SUBJECT --worker jujubordados-2 --type secret_text --text "mailto:contato@seudominio.com"
+npx cf workers secrets update VAPID_PUBLIC_KEY --worker jujubordados-2 --type secret_text --text <chave-publica-base64url>
+npx cf workers secrets update VAPID_PRIVATE_KEY --worker jujubordados-2 --type secret_text --text <chave-privada-base64url>
+```
+
+Gere o par de chaves com uma ferramenta confiável que produza chaves VAPID P-256 em Base64URL; não use uma chave de outro site. Os endpoints de push são armazenados apenas no D1 e removidos quando o provedor informa que expiraram.

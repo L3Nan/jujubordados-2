@@ -28,6 +28,9 @@ export default function AdminOrders() {
   const [categories, setCategories] = useState<StoreCategory[]>([]);
   const [view, setView] = useState<"orders" | "catalog" | "management">("orders");
   const [catalogNotice, setCatalogNotice] = useState("");
+  const [pushConfigured, setPushConfigured] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const knownOrderIds = useRef<Set<string> | null>(null);
 
   const loadOrders = useCallback(async () => {
@@ -70,6 +73,23 @@ export default function AdminOrders() {
   useEffect(() => {
     if (!authenticated) return;
     let mounted = true;
+    void fetch("/api/admin/push", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error();
+      const data = await response.json() as { configured: boolean; publicKey: string | null };
+      if (!mounted) return;
+      setPushConfigured(data.configured);
+      if (data.configured && "serviceWorker" in navigator && "PushManager" in window) {
+        const registration = await navigator.serviceWorker.register("/sw.js");
+        const subscription = await registration.pushManager.getSubscription();
+        setPushSubscribed(Boolean(subscription));
+      }
+    }).catch(() => { if (mounted) setPushConfigured(false); });
+    return () => { mounted = false; };
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let mounted = true;
     void fetch("/api/store/catalog", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error();
       const data = await response.json() as { products: StoreProduct[]; categories: StoreCategory[] };
@@ -101,6 +121,44 @@ export default function AdminOrders() {
       setNotice(permission === "granted" ? "Avisos do navegador ativados. Mantenha o painel aberto para receber novos pedidos." : "Permissão não concedida. Você pode ativá-la depois nas configurações do navegador.");
     } catch {
       setNotice("Não foi possível solicitar a permissão. Confira as configurações do navegador.");
+    }
+  }
+
+  async function setBackgroundPush(enabled: boolean) {
+    setPushBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const status = await fetch("/api/admin/push", { cache: "no-store" });
+      if (!status.ok) throw new Error("Não foi possível consultar as notificações.");
+      const config = await status.json() as { configured: boolean; publicKey: string | null };
+      if (!config.configured || !config.publicKey) throw new Error("As notificações em segundo plano ainda não foram configuradas no servidor.");
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) throw new Error("Este navegador não oferece notificações em segundo plano.");
+      if (enabled) {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") throw new Error("Permissão não concedida. Ative as notificações nas configurações do navegador.");
+        const registration = await navigator.serviceWorker.register("/sw.js");
+        const applicationServerKey = Uint8Array.from(atob(config.publicKey.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - config.publicKey.length % 4) % 4)), (character) => character.charCodeAt(0));
+        const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+        const saved = await fetch("/api/admin/push", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subscription: subscription.toJSON() }) });
+        if (!saved.ok) throw new Error("Não foi possível salvar este dispositivo.");
+        setPushSubscribed(true);
+        setNotice("Avisos em segundo plano ativados neste dispositivo.");
+      } else {
+        const registration = await navigator.serviceWorker.getRegistration("/");
+        const subscription = await registration?.pushManager.getSubscription();
+        if (subscription) {
+          const removed = await fetch("/api/admin/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint }) });
+          if (!removed.ok) throw new Error("Não foi possível remover a inscrição do servidor.");
+          await subscription.unsubscribe();
+        }
+        setPushSubscribed(false);
+        setNotice("Avisos em segundo plano desativados neste dispositivo.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível atualizar as notificações.");
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -192,7 +250,7 @@ export default function AdminOrders() {
       </section> : <>
       <section className="admin-orders-summary" aria-label="Resumo de pedidos"><article><span>Pedidos registrados</span><strong>{orders.length}</strong></article><article><span>Aguardando atendimento</span><strong>{newOrders}</strong></article></section>
       {notice && <p className="admin-notice" role="status">{notice}</p>}
-      <section className="order-notification-settings" aria-label="Avisos de novos pedidos"><div><strong>Avisos de novos pedidos</strong><p>O painel verifica pedidos a cada 30 segundos. Com a permissão do navegador, aparece um aviso do sistema quando o painel está aberto.</p></div>{notificationPermission === "granted" ? <span className="notification-enabled" role="status">Notificações permitidas</span> : notificationPermission === "unsupported" ? <span className="admin-muted">Notificações indisponíveis neste navegador</span> : <button className="button button-light" type="button" onClick={() => void enableNotifications()}>{notificationPermission === "denied" ? "Como liberar notificações" : "Ativar avisos"}</button>}</section>
+      <section className="order-notification-settings" aria-label="Avisos de novos pedidos"><div><strong>Avisos de novos pedidos</strong><p>{pushConfigured ? "Receba avisos mesmo com o painel fechado, neste navegador e dispositivo." : "O aviso em segundo plano depende da configuração segura do servidor. Com o painel aberto, os avisos do navegador continuam disponíveis."}</p></div><div className="notification-actions">{pushConfigured ? <button className="button button-light" type="button" disabled={pushBusy} onClick={() => void setBackgroundPush(!pushSubscribed)}>{pushBusy ? "Salvando..." : pushSubscribed ? "Desativar neste dispositivo" : "Ativar neste dispositivo"}</button> : notificationPermission === "granted" ? <span className="notification-enabled" role="status">Permissão do navegador ativa</span> : notificationPermission === "unsupported" ? <span className="admin-muted">Notificações indisponíveis neste navegador</span> : <button className="button button-light" type="button" onClick={() => void enableNotifications()}>{notificationPermission === "denied" ? "Como liberar notificações" : "Ativar avisos"}</button>}</div></section>
       {error && <p className="checkout-error" role="alert">{error}</p>}
       {orders.length === 0 ? <section className="admin-orders-empty"><span aria-hidden="true">✳</span><h2>Nenhum pedido recebido ainda</h2><p>Quando alguém concluir o checkout, o pedido aparecerá aqui.</p></section> : <div className="admin-orders-list">{orders.map((order) => (
         <article className="admin-order-card" key={order.id}>

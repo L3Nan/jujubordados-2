@@ -13,6 +13,7 @@
     "deploy:vinext": "vinext-cloudflare deploy"
   },
   "dependencies": {
+    "@block65/webcrypto-web-push": "^2.0.0",
     "@vinext/cloudflare": "^1.4.0",
     "next": "16.4.6",
     "qrcode.react": "^4.2.0",
