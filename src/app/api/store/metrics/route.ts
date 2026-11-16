@@ -8,7 +8,12 @@ function saoPauloDate() {
 
 export async function POST(request: Request) {
   const origin = request.headers.get("Origin");
-  if (!origin || new URL(origin).origin !== new URL(request.url).origin) return Response.json({ error: "same_origin_required" }, { status: 403 });
+  if (!origin) return Response.json({ error: "same_origin_required" }, { status: 403 });
+  try {
+    if (new URL(origin).origin !== new URL(request.url).origin) return Response.json({ error: "same_origin_required" }, { status: 403 });
+  } catch {
+    return Response.json({ error: "same_origin_required" }, { status: 403 });
+  }
   const contentLength = Number(request.headers.get("Content-Length") ?? 0);
   if (contentLength > 1024) return Response.json({ error: "payload_too_large" }, { status: 413 });
 
