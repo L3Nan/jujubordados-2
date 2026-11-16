@@ -57,3 +57,5 @@ Métricas da vitrine são contagens agregadas por dia em America/Sao_Paulo: cada
 O painel tem calendário de campanhas e eventos e permite registrar aniversários de clientes (com autorização). Os registros ficam junto aos dados operacionais protegidos no D1.
 
 O calendário mostra sugestões sazonais nacionais para os próximos 12 meses, calculadas por regras recorrentes e adicionadas somente por escolha da proprietária. As fontes dos Correios e Sebrae de 2026 aparecem junto às sugestões; feriados locais precisam ser conferidos.
+
+O painel de pedidos atualiza a lista a cada 30 segundos e pode emitir notificações do navegador após consentimento. Os avisos aparecem enquanto o painel está aberto; push em segundo plano ainda exige configuração de Web Push e chaves VAPID.

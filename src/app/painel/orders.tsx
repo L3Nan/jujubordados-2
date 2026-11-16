@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { formatPrice, type StoreProduct } from "@/data/catalog";
 import type { StoreCategory } from "@/data/store-catalog";
 import AdminPanel from "./panel";
@@ -15,31 +16,56 @@ type Order = {
 const statuses = ["Novo", "Em produção", "Pronto", "Concluído", "Cancelado"];
 
 export default function AdminOrders() {
+  const router = useRouter();
   const [orders, setOrders] = useState<Order[]>([]);
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [catalog, setCatalog] = useState<StoreProduct[]>([]);
   const [categories, setCategories] = useState<StoreCategory[]>([]);
   const [view, setView] = useState<"orders" | "catalog" | "management">("orders");
   const [catalogNotice, setCatalogNotice] = useState("");
+  const knownOrderIds = useRef<Set<string> | null>(null);
 
   const loadOrders = useCallback(async () => {
     const response = await fetch("/api/admin/orders", { cache: "no-store" });
     if (response.status === 401) { setAuthenticated(false); setLoading(false); return; }
     if (!response.ok) throw new Error("Não foi possível carregar os pedidos.");
     const data = await response.json() as { orders: Order[] };
+    const previousIds = knownOrderIds.current;
+    const currentIds = new Set(data.orders.map((order) => order.id));
+    knownOrderIds.current = currentIds;
+    const arrivingOrders = previousIds ? data.orders.filter((order) => !previousIds.has(order.id) && order.status === "Novo") : [];
     setOrders(data.orders);
     setAuthenticated(true);
     setLoading(false);
-  }, []);
+    if (arrivingOrders.length) {
+      setError("");
+      setNotice(`${arrivingOrders.length} novo${arrivingOrders.length === 1 ? "" : "s"} pedido${arrivingOrders.length === 1 ? "" : "s"} recebido${arrivingOrders.length === 1 ? "" : "s"}.`);
+      if (typeof window !== "undefined" && "Notification" in window && window.Notification.permission === "granted") {
+        try {
+          const notification = new window.Notification("Novo pedido na Jujubordados", { body: "Há um pedido aguardando atendimento.", icon: "/icons/icon-192.png", tag: `new-orders-${Date.now()}` });
+          notification.onclick = () => { window.focus(); router.push("/painel"); notification.close(); };
+        } catch { setNotice("Há novos pedidos aguardando atendimento no painel."); }
+      }
+    }
+  }, [router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadOrders().catch(() => { setError("Não foi possível conectar ao banco de pedidos."); setLoading(false); }); }, 0);
     return () => window.clearTimeout(timer);
   }, [loadOrders]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    const refreshWhenVisible = () => { if (document.visibilityState === "visible") void loadOrders().catch(() => {}); };
+    const interval = window.setInterval(refreshWhenVisible, 30_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refreshWhenVisible); };
+  }, [authenticated, loadOrders]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -64,7 +90,18 @@ export default function AdminOrders() {
 
   async function signOut() {
     await fetch("/api/admin/auth", { method: "DELETE" });
-    setAuthenticated(false); setOrders([]);
+    setAuthenticated(false); setOrders([]); knownOrderIds.current = null;
+  }
+
+  async function enableNotifications() {
+    if (!("Notification" in window)) { setNotice("Este navegador não oferece notificações do sistema."); return; }
+    if (window.Notification.permission === "denied") { setNotice("Para liberar, abra as permissões do site nas configurações do navegador e permita notificações."); return; }
+    try {
+      const permission = await window.Notification.requestPermission();
+      setNotice(permission === "granted" ? "Avisos do navegador ativados. Mantenha o painel aberto para receber novos pedidos." : "Permissão não concedida. Você pode ativá-la depois nas configurações do navegador.");
+    } catch {
+      setNotice("Não foi possível solicitar a permissão. Confira as configurações do navegador.");
+    }
   }
 
   async function updateStatus(order: Order, status: string) {
@@ -129,6 +166,7 @@ export default function AdminOrders() {
   );
 
   const newOrders = orders.filter((order) => order.status === "Novo").length;
+  const notificationPermission = typeof window !== "undefined" && "Notification" in window ? window.Notification.permission : "unsupported";
   return (
     <main className="admin-orders-page">
       <header className="admin-orders-header"><div><Link className="admin-back-link" href="/">← Vitrine</Link><p className="eyebrow">Gestão da loja</p><h1>{view === "orders" ? "Pedidos recebidos" : view === "catalog" ? "Catálogo compartilhado" : "Gestão completa"}</h1></div><button className="admin-logout" type="button" onClick={signOut}>Sair</button></header>
@@ -153,6 +191,8 @@ export default function AdminOrders() {
         <button className="button button-rose admin-save-catalog" type="button" onClick={() => void saveCatalog()}>Salvar catálogo compartilhado <span aria-hidden="true">↗</span></button>
       </section> : <>
       <section className="admin-orders-summary" aria-label="Resumo de pedidos"><article><span>Pedidos registrados</span><strong>{orders.length}</strong></article><article><span>Aguardando atendimento</span><strong>{newOrders}</strong></article></section>
+      {notice && <p className="admin-notice" role="status">{notice}</p>}
+      <section className="order-notification-settings" aria-label="Avisos de novos pedidos"><div><strong>Avisos de novos pedidos</strong><p>O painel verifica pedidos a cada 30 segundos. Com a permissão do navegador, aparece um aviso do sistema quando o painel está aberto.</p></div>{notificationPermission === "granted" ? <span className="notification-enabled" role="status">Notificações permitidas</span> : notificationPermission === "unsupported" ? <span className="admin-muted">Notificações indisponíveis neste navegador</span> : <button className="button button-light" type="button" onClick={() => void enableNotifications()}>{notificationPermission === "denied" ? "Como liberar notificações" : "Ativar avisos"}</button>}</section>
       {error && <p className="checkout-error" role="alert">{error}</p>}
       {orders.length === 0 ? <section className="admin-orders-empty"><span aria-hidden="true">✳</span><h2>Nenhum pedido recebido ainda</h2><p>Quando alguém concluir o checkout, o pedido aparecerá aqui.</p></section> : <div className="admin-orders-list">{orders.map((order) => (
         <article className="admin-order-card" key={order.id}>
