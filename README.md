@@ -49,3 +49,5 @@ O binding `DB` está em `cloudflare.config.ts`. Nunca versione tokens, senhas ou
 Fotos enviadas pelo painel são convertidas para WebP e armazenadas separadamente no D1; a vitrine as entrega por URLs públicas imutáveis, sem serviço de imagens externo.
 
 A vitrine também pode ser instalada como PWA em dispositivos compatíveis; o painel informa como adicionar à tela inicial no iOS e Android.
+
+O painel gera QR Codes localmente para a vitrine, produtos publicados e categorias, com download PNG e impressão.
