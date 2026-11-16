@@ -54,12 +54,15 @@ export type LocalQuoteItem = {
   description: string;
   quantity: number;
   unitPriceCents: number;
+  productId?: string;
+  variantLabel?: string;
 };
 
 export type LocalQuote = {
   id: string;
   customerName: string;
   customerPhone: string;
+  customerId?: string;
   itemDescription: string;
   quantity: number;
   unitPriceCents: number;

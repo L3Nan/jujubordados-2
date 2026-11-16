@@ -12,7 +12,7 @@ import StoreMetrics from "./metrics";
 import CalendarSuggestions from "./calendar-suggestions";
 
 type PanelSection = "overview" | "catalog" | "categories" | "orders" | "customers" | "quotes" | "coupons" | "shipping" | "metrics" | "calendar" | "finance";
-type QuoteItemDraft = { description: string; quantity: string; unitPrice: string };
+type QuoteItemDraft = { description: string; quantity: string; unitPrice: string; productId?: string; variantLabel?: string };
 
 function quoteLineItems(quote: LocalQuote): LocalQuoteItem[] {
   return quote.items?.length ? quote.items : [{ description: quote.itemDescription, quantity: quote.quantity, unitPriceCents: quote.unitPriceCents }];
@@ -20,6 +20,133 @@ function quoteLineItems(quote: LocalQuote): LocalQuoteItem[] {
 
 function quoteTotalCents(quote: LocalQuote) {
   return quoteLineItems(quote).reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
+}
+
+function pdfSafeText(value: string) {
+  return value.replace(/[\u2010-\u2015\u2212]/g, "-").replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\u2026/g, "...").replace(/[^\u0000-\u00ff]/g, "?");
+}
+
+function wrapPdfText(text: string, font: { widthOfTextAtSize(value: string, size: number): number }, size: number, maxWidth: number) {
+  const words = pdfSafeText(text).split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && font.widthOfTextAtSize(next, size) > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+async function buildQuotePdf(quote: LocalQuote) {
+  const { PDFDocument, StandardFonts, rgb, PageSizes } = await import("pdf-lib");
+  const document = await PDFDocument.create();
+  document.setTitle(`Orçamento ${quote.id} - Jujubordados`);
+  document.setSubject(`Proposta comercial para ${quote.customerName}`);
+  document.setCreator("Jujubordados");
+  const regular = await document.embedFont(StandardFonts.Helvetica);
+  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const pageWidth = PageSizes.A4[0];
+  const pageHeight = PageSizes.A4[1];
+  const ink = rgb(0.25, 0.22, 0.20);
+  const muted = rgb(0.47, 0.43, 0.41);
+  const rose = rgb(0.61, 0.25, 0.32);
+  const pale = rgb(0.98, 0.96, 0.94);
+  const pages: ReturnType<typeof document.addPage>[] = [];
+  let page = document.addPage(PageSizes.A4);
+  pages.push(page);
+
+  const drawHeader = (continuation = false) => {
+    page.drawText("JUJUBORDADOS", { x: 48, y: pageHeight - 46, size: 12, font: bold, color: rose });
+    page.drawText(continuation ? "ORÇAMENTO · CONTINUAÇÃO" : "PROPOSTA COMERCIAL", { x: 48, y: pageHeight - 70, size: 9, font: regular, color: muted });
+    page.drawLine({ start: { x: 48, y: pageHeight - 82 }, end: { x: pageWidth - 48, y: pageHeight - 82 }, thickness: 1, color: rose });
+    if (!continuation) {
+      page.drawText("ORÇAMENTO", { x: 48, y: pageHeight - 126, size: 24, font: bold, color: ink });
+      page.drawText(pdfSafeText(quote.id), { x: pageWidth - 170, y: pageHeight - 119, size: 10, font: bold, color: rose });
+      page.drawText(`Cliente: ${pdfSafeText(quote.customerName)}`, { x: 48, y: pageHeight - 157, size: 11, font: bold, color: ink });
+      if (quote.customerPhone) page.drawText(`WhatsApp: ${pdfSafeText(quote.customerPhone)}`, { x: 48, y: pageHeight - 175, size: 9, font: regular, color: muted });
+      page.drawText(`Emitido em ${new Date(quote.createdAt).toLocaleDateString("pt-BR")}`, { x: 48, y: pageHeight - 193, size: 9, font: regular, color: muted });
+    }
+  };
+
+  const drawTableHeader = (y: number) => {
+    page.drawRectangle({ x: 48, y: y - 22, width: pageWidth - 96, height: 25, color: pale });
+    page.drawText("PRODUTO OU SERVIÇO", { x: 58, y: y - 14, size: 8, font: bold, color: rose });
+    page.drawText("QTD.", { x: 300, y: y - 14, size: 8, font: bold, color: rose });
+    page.drawText("UNITÁRIO", { x: 426 - bold.widthOfTextAtSize("UNITÁRIO", 8), y: y - 14, size: 8, font: bold, color: rose });
+    page.drawText("TOTAL", { x: 536 - bold.widthOfTextAtSize("TOTAL", 8), y: y - 14, size: 8, font: bold, color: rose });
+  };
+
+  drawHeader();
+  let cursorY = pageHeight - 225;
+  drawTableHeader(cursorY);
+  cursorY -= 32;
+  for (const item of quoteLineItems(quote)) {
+    const description = item.variantLabel ? `${item.description} · ${item.variantLabel}` : item.description;
+    const lines = wrapPdfText(description, regular, 9, 225);
+    const rowHeight = Math.max(30, lines.length * 13 + 14);
+    if (cursorY - rowHeight < 96) {
+      page = document.addPage(PageSizes.A4);
+      pages.push(page);
+      drawHeader(true);
+      cursorY = pageHeight - 110;
+      drawTableHeader(cursorY);
+      cursorY -= 32;
+    }
+    page.drawText(lines.join("\n"), { x: 58, y: cursorY - 10, size: 9, lineHeight: 13, font: regular, color: ink, maxWidth: 225 });
+    page.drawText(String(item.quantity), { x: 300, y: cursorY - 10, size: 9, font: regular, color: ink });
+    const unit = formatPrice(item.unitPriceCents);
+    const lineTotal = formatPrice(item.unitPriceCents * item.quantity);
+    page.drawText(unit, { x: 426 - regular.widthOfTextAtSize(pdfSafeText(unit), 9), y: cursorY - 10, size: 9, font: regular, color: ink });
+    page.drawText(lineTotal, { x: 536 - regular.widthOfTextAtSize(pdfSafeText(lineTotal), 9), y: cursorY - 10, size: 9, font: regular, color: ink });
+    cursorY -= rowHeight;
+    page.drawLine({ start: { x: 48, y: cursorY }, end: { x: pageWidth - 48, y: cursorY }, thickness: 0.5, color: pale });
+  }
+
+  const total = quoteTotalCents(quote);
+  if (cursorY < 170) {
+    page = document.addPage(PageSizes.A4);
+    pages.push(page);
+    drawHeader(true);
+    cursorY = pageHeight - 115;
+  }
+  cursorY -= 18;
+  const drawSummary = (label: string, value: string, strong = false) => {
+    page.drawText(label, { x: 315, y: cursorY, size: strong ? 12 : 9, font: strong ? bold : regular, color: strong ? rose : muted });
+    page.drawText(pdfSafeText(value), { x: 536 - (strong ? bold : regular).widthOfTextAtSize(pdfSafeText(value), strong ? 12 : 9), y: cursorY, size: strong ? 12 : 9, font: strong ? bold : regular, color: strong ? rose : ink });
+    cursorY -= strong ? 24 : 17;
+  };
+  drawSummary("Total do orçamento", formatPrice(total), true);
+  if (quote.depositCents > 0) {
+    drawSummary("Sinal solicitado", formatPrice(quote.depositCents));
+    drawSummary("Saldo restante", formatPrice(Math.max(0, total - quote.depositCents)));
+  }
+  cursorY -= 5;
+  const details = [
+    quote.validUntil ? `Validade: ${new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : "",
+    quote.deliveryDate ? `Entrega prevista: ${new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : "",
+    quote.notes ? `Observações: ${quote.notes}` : "",
+  ].filter(Boolean);
+  for (const detail of details) {
+    const lines = wrapPdfText(detail, regular, 9, pageWidth - 96);
+    if (cursorY - lines.length * 13 < 76) {
+      page = document.addPage(PageSizes.A4);
+      pages.push(page);
+      drawHeader(true);
+      cursorY = pageHeight - 115;
+    }
+    page.drawText(lines.join("\n"), { x: 48, y: cursorY, size: 9, lineHeight: 13, font: regular, color: muted, maxWidth: pageWidth - 96 });
+    cursorY -= lines.length * 13 + 8;
+  }
+  pages.forEach((quotePage, index) => {
+    quotePage.drawLine({ start: { x: 48, y: 48 }, end: { x: pageWidth - 48, y: 48 }, thickness: 0.5, color: pale });
+    quotePage.drawText("Jujubordados · Orçamento comercial", { x: 48, y: 33, size: 8, font: regular, color: muted });
+    quotePage.drawText(`${index + 1} / ${pages.length}`, { x: pageWidth - 75, y: 33, size: 8, font: regular, color: muted });
+  });
+  return await document.save();
 }
 
 const panelSections: PanelSection[] = ["overview", "catalog", "categories", "orders", "customers", "quotes", "coupons", "shipping", "metrics", "calendar", "finance"];
@@ -102,6 +229,7 @@ export default function AdminPanel() {
   const [goalAmount, setGoalAmount] = useState("");
   const [quoteName, setQuoteName] = useState("");
   const [quotePhone, setQuotePhone] = useState("");
+  const [quoteCustomerId, setQuoteCustomerId] = useState("");
   const [quoteItems, setQuoteItems] = useState<QuoteItemDraft[]>([{ description: "", quantity: "1", unitPrice: "" }]);
   const [editingQuoteId, setEditingQuoteId] = useState("");
   const [quoteValidUntil, setQuoteValidUntil] = useState("");
@@ -109,6 +237,7 @@ export default function AdminPanel() {
   const [quoteDeposit, setQuoteDeposit] = useState("");
   const [quoteNotes, setQuoteNotes] = useState("");
   const [printingQuoteId, setPrintingQuoteId] = useState("");
+  const [exportingQuoteId, setExportingQuoteId] = useState("");
   const [confirmQuoteDeleteId, setConfirmQuoteDeleteId] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [couponType, setCouponType] = useState<"percentage" | "fixed">("percentage");
@@ -414,7 +543,7 @@ export default function AdminPanel() {
 
   function createQuote(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const items = quoteItems.map((item) => ({ description: item.description.trim(), quantity: Number(item.quantity), unitPriceCents: Math.round(Number(item.unitPrice.replace(",", ".")) * 100) }));
+    const items = quoteItems.map((item) => ({ description: item.description.trim(), quantity: Number(item.quantity), unitPriceCents: Math.round(Number(item.unitPrice.replace(",", ".")) * 100), ...(item.productId ? { productId: item.productId, variantLabel: item.variantLabel } : {}) }));
     const totalCents = items.reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
     const depositPercent = Number(quoteDeposit.replace(",", ".")) || 0;
     if (!quoteName.trim() || !items.length || items.length > 30 || items.some((item) => !item.description || item.description.length > 250 || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 10000 || !Number.isSafeInteger(item.unitPriceCents) || item.unitPriceCents < 1 || item.unitPriceCents > 100_000_000) || !Number.isSafeInteger(totalCents) || totalCents <= 0 || depositPercent < 0 || depositPercent > 100) {
@@ -422,24 +551,43 @@ export default function AdminPanel() {
       return;
     }
     const firstItem = items[0];
-    const quote: LocalQuote = { id: editingQuoteId || `ORC-${crypto.randomUUID()}`, customerName: quoteName.trim(), customerPhone: quotePhone.trim(), itemDescription: firstItem.description, quantity: firstItem.quantity, unitPriceCents: firstItem.unitPriceCents, items, validUntil: quoteValidUntil, deliveryDate: quoteDeliveryDate, depositCents: Math.round(totalCents * depositPercent / 100), notes: quoteNotes.trim(), status: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.status ?? "Em aberto" : "Em aberto", createdAt: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.createdAt ?? new Date().toISOString() : new Date().toISOString() };
+    const matchingCustomer = operations.customers.find((customer) => customer.id === quoteCustomerId || (customer.phone.replace(/\D/g, "") === quotePhone.replace(/\D/g, "") && quotePhone.trim()));
+    const quote: LocalQuote = { id: editingQuoteId || `ORC-${crypto.randomUUID()}`, customerName: quoteName.trim(), customerPhone: quotePhone.trim(), customerId: matchingCustomer?.id, itemDescription: firstItem.description, quantity: firstItem.quantity, unitPriceCents: firstItem.unitPriceCents, items, validUntil: quoteValidUntil, deliveryDate: quoteDeliveryDate, depositCents: Math.round(totalCents * depositPercent / 100), notes: quoteNotes.trim(), status: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.status ?? "Em aberto" : "Em aberto", createdAt: editingQuoteId ? operations.quotes.find((item) => item.id === editingQuoteId)?.createdAt ?? new Date().toISOString() : new Date().toISOString() };
     const customerExists = quotePhone.trim() && operations.customers.some((customer) => customer.phone.replace(/\D/g, "") === quotePhone.replace(/\D/g, ""));
-    const customer = editingQuoteId || customerExists || !quotePhone.trim() ? [] : [{ id: `CLI-${crypto.randomUUID()}`, name: quoteName.trim(), phone: quotePhone.trim(), email: "", notes: "" }];
+    const customer = editingQuoteId || matchingCustomer || customerExists || !quotePhone.trim() ? [] : [{ id: `CLI-${crypto.randomUUID()}`, name: quoteName.trim(), phone: quotePhone.trim(), email: "", notes: "" }];
     saveOperations({ ...operations, quotes: editingQuoteId ? operations.quotes.map((item) => item.id === editingQuoteId ? quote : item) : [quote, ...operations.quotes], customers: [...customer, ...operations.customers] });
     resetQuoteDraft();
     setNotice(editingQuoteId ? "Orçamento atualizado." : "Orçamento salvo."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function resetQuoteDraft() {
-    setEditingQuoteId(""); setQuoteName(""); setQuotePhone(""); setQuoteItems([{ description: "", quantity: "1", unitPrice: "" }]); setQuoteValidUntil(""); setQuoteDeliveryDate(""); setQuoteDeposit(""); setQuoteNotes("");
+    setEditingQuoteId(""); setQuoteCustomerId(""); setQuoteName(""); setQuotePhone(""); setQuoteItems([{ description: "", quantity: "1", unitPrice: "" }]); setQuoteValidUntil(""); setQuoteDeliveryDate(""); setQuoteDeposit(""); setQuoteNotes("");
+  }
+
+  function updateQuoteCatalogItem(index: number, value: string) {
+    if (!value) {
+      setQuoteItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId: undefined, variantLabel: undefined } : item));
+      return;
+    }
+    const separator = value.indexOf("::");
+    if (separator < 1) return;
+    const productId = value.slice(0, separator);
+    let variantLabel = "";
+    try { variantLabel = decodeURIComponent(value.slice(separator + 2)); } catch { return; }
+    const product = catalog.find((item) => item.id === productId && item.isActive !== false);
+    const option = product?.sizes.find((item) => item.label === variantLabel);
+    if (!product || !option) return;
+    setQuoteItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId, variantLabel, description: product.name, unitPrice: (option.priceCents / 100).toFixed(2).replace(".", ",") } : item));
   }
 
   function editQuote(quote: LocalQuote) {
     if (quote.status !== "Em aberto") return;
     setEditingQuoteId(quote.id);
-    setQuoteName(quote.customerName);
-    setQuotePhone(quote.customerPhone);
-    setQuoteItems(quoteLineItems(quote).map((item) => ({ description: item.description, quantity: String(item.quantity), unitPrice: (item.unitPriceCents / 100).toFixed(2).replace(".", ",") })));
+    const customer = operations.customers.find((item) => item.id === quote.customerId || (quote.customerPhone && item.phone.replace(/\D/g, "") === quote.customerPhone.replace(/\D/g, "")));
+    setQuoteCustomerId(customer?.id ?? "");
+    setQuoteName(customer?.name ?? quote.customerName);
+    setQuotePhone(customer?.phone ?? quote.customerPhone);
+    setQuoteItems(quoteLineItems(quote).map((item) => ({ description: item.description, quantity: String(item.quantity), unitPrice: (item.unitPriceCents / 100).toFixed(2).replace(".", ","), productId: item.productId, variantLabel: item.variantLabel })));
     setQuoteValidUntil(quote.validUntil);
     setQuoteDeliveryDate(quote.deliveryDate);
     setQuoteDeposit(quoteTotalCents(quote) ? String(Math.round(quote.depositCents / quoteTotalCents(quote) * 10000) / 100).replace(".", ",") : "");
@@ -453,7 +601,7 @@ export default function AdminPanel() {
     if (!quote) return;
     if (status === "Convertido em pedido" && quote.status !== "Convertido em pedido") {
       const items = quoteLineItems(quote);
-      const order: LocalOrder = { id: `PED-${crypto.randomUUID()}`, customerName: quote.customerName, customerPhone: quote.customerPhone, description: items.map((item) => `${item.quantity}x ${item.description} · ${formatPrice(item.unitPriceCents)} cada · ${formatPrice(item.quantity * item.unitPriceCents)}`).join("\n"), totalCents: quoteTotalCents(quote), status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString() };
+      const order: LocalOrder = { id: `PED-${crypto.randomUUID()}`, customerName: quote.customerName, customerPhone: quote.customerPhone, description: items.map((item) => `${item.quantity}x ${item.description}${item.variantLabel ? ` (${item.variantLabel})` : ""} · ${formatPrice(item.unitPriceCents)} cada · ${formatPrice(item.quantity * item.unitPriceCents)}`).join("\n"), totalCents: quoteTotalCents(quote), status: "Novo", paymentStatus: "Pendente", createdAt: new Date().toISOString() };
       saveOperations({ ...operations, orders: [order, ...operations.orders], quotes: operations.quotes.map((item) => item.id === quote.id ? { ...item, status } : item) });
     } else saveOperations({ ...operations, quotes: operations.quotes.map((item) => item.id === quote.id ? { ...item, status } : item) });
     setNotice(status === "Convertido em pedido" ? "Orçamento convertido em pedido." : "Status do orçamento atualizado."); window.setTimeout(() => setNotice(""), 3000);
@@ -464,12 +612,34 @@ export default function AdminPanel() {
     window.setTimeout(() => { window.print(); window.setTimeout(() => setPrintingQuoteId(""), 500); }, 100);
   }
 
+  async function downloadQuotePdf(quote: LocalQuote) {
+    setExportingQuoteId(quote.id);
+    try {
+      const bytes = await buildQuotePdf(quote);
+      const pdfBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      const blob = new Blob([pdfBuffer], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const customerSlug = quote.customerName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "cliente";
+      anchor.href = url;
+      anchor.download = `orcamento-${customerSlug}.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("PDF do orçamento gerado no dispositivo.");
+    } catch {
+      setNotice("Não foi possível gerar o PDF. Tente novamente neste dispositivo.");
+    } finally {
+      setExportingQuoteId("");
+      window.setTimeout(() => setNotice(""), 3500);
+    }
+  }
+
   function sendQuoteToWhatsApp(quote: LocalQuote) {
     const items = quoteLineItems(quote);
     const total = quoteTotalCents(quote);
     const message = [
       `Olá, ${quote.customerName}! Segue o orçamento da Jujubordados:`,
-      ...items.map((item) => `${item.quantity}x ${item.description} - ${formatPrice(item.unitPriceCents)} cada (${formatPrice(item.quantity * item.unitPriceCents)})`),
+      ...items.map((item) => `${item.quantity}x ${item.description}${item.variantLabel ? ` (${item.variantLabel})` : ""} - ${formatPrice(item.unitPriceCents)} cada (${formatPrice(item.quantity * item.unitPriceCents)})`),
       `Total: ${formatPrice(total)}`,
       quote.depositCents > 0 ? `Sinal: ${formatPrice(quote.depositCents)} · Saldo: ${formatPrice(Math.max(0, total - quote.depositCents))}` : "",
       quote.validUntil ? `Válido até: ${new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}` : "",
@@ -612,16 +782,17 @@ export default function AdminPanel() {
           {section === "quotes" && <section className="admin-catalog" id="quotes"><div className="admin-section-head"><div><p className="eyebrow">PROPOSTAS PERSONALIZADAS</p><h2>Orçamentos</h2><p>Monte uma proposta com validade, entrega prevista e sinal opcional. Use Imprimir para salvar como PDF.</p></div></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
             <form className="admin-form-grid quote-form" onSubmit={createQuote}>
-              <label>Nome da cliente<input required maxLength={120} value={quoteName} onChange={(event) => setQuoteName(event.target.value)} /></label>
-              <label>WhatsApp (opcional)<input inputMode="tel" maxLength={40} value={quotePhone} onChange={(event) => setQuotePhone(event.target.value)} /></label>
-              <fieldset className="quote-items-field"><legend>Itens do orçamento</legend>{quoteItems.map((item, index) => <div className="quote-item-draft" key={index}><label>Produto ou serviço<input required maxLength={250} value={item.description} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value } : row))} /></label><label>Quantidade<input required type="number" min="1" max="10000" step="1" value={item.quantity} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row))} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={item.unitPrice} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, unitPrice: event.target.value } : row))} /></label><button className="quote-remove-item" type="button" disabled={quoteItems.length === 1} onClick={() => setQuoteItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remover item</button></div>)}<button className="quote-add-item" type="button" disabled={quoteItems.length >= 30} onClick={() => setQuoteItems((current) => [...current, { description: "", quantity: "1", unitPrice: "" }])}>＋ Adicionar item</button></fieldset>
+              <label className="quote-customer-picker">Cliente cadastrada (opcional)<select value={quoteCustomerId} onChange={(event) => { const id = event.target.value; const customer = operations.customers.find((item) => item.id === id); setQuoteCustomerId(id); setQuoteName(customer?.name ?? ""); setQuotePhone(customer?.phone ?? ""); }}><option value="">Nova cliente / preencher manualmente</option>{operations.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></label>
+              <label>Nome da cliente<input required maxLength={120} value={quoteName} readOnly={Boolean(quoteCustomerId)} onChange={(event) => setQuoteName(event.target.value)} /></label>
+              <label>WhatsApp (opcional)<input inputMode="tel" maxLength={40} value={quotePhone} readOnly={Boolean(quoteCustomerId)} onChange={(event) => setQuotePhone(event.target.value)} /></label>
+              <fieldset className="quote-items-field"><legend>Itens do orçamento</legend>{quoteItems.map((item, index) => { const selectedValue = item.productId ? `${item.productId}::${encodeURIComponent(item.variantLabel ?? "")}` : ""; const availableProducts = catalog.filter((product) => product.isActive !== false); const selectedProduct = item.productId ? catalog.find((product) => product.id === item.productId) : undefined; return <div className="quote-item-draft" key={index}><label>Escolher do catálogo<select value={selectedValue} onChange={(event) => updateQuoteCatalogItem(index, event.target.value)}><option value="">Item livre / serviço personalizado</option>{selectedProduct && selectedProduct.isActive === false && <option value={selectedValue}>Item indisponível · {item.description}</option>}{availableProducts.flatMap((product) => product.sizes.map((option) => <option key={`${product.id}-${option.label}`} value={`${product.id}::${encodeURIComponent(option.label)}`}>{product.name} · {option.label} · {formatPrice(option.priceCents)}</option>))}</select></label><label>Produto ou serviço<input required maxLength={250} value={item.description} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value, productId: undefined, variantLabel: undefined } : row))} /></label><label>Quantidade<input required type="number" min="1" max="10000" step="1" value={item.quantity} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row))} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={item.unitPrice} onChange={(event) => setQuoteItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, unitPrice: event.target.value } : row))} /></label><button className="quote-remove-item" type="button" disabled={quoteItems.length === 1} onClick={() => setQuoteItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remover item</button></div>; })}<button className="quote-add-item" type="button" disabled={quoteItems.length >= 30} onClick={() => setQuoteItems((current) => [...current, { description: "", quantity: "1", unitPrice: "" }])}>＋ Adicionar item</button></fieldset>
               <label>Sinal solicitado (%)<input inputMode="decimal" min="0" max="100" placeholder="Opcional" value={quoteDeposit} onChange={(event) => setQuoteDeposit(event.target.value)} /></label>
               <label>Validade até<input required type="date" value={quoteValidUntil} onChange={(event) => setQuoteValidUntil(event.target.value)} /></label>
               <label>Entrega prevista<input required type="date" value={quoteDeliveryDate} onChange={(event) => setQuoteDeliveryDate(event.target.value)} /></label>
               <label className="quote-notes-field">Observações<textarea rows={2} maxLength={2000} value={quoteNotes} onChange={(event) => setQuoteNotes(event.target.value)} /></label>
               <div className="quote-form-actions"><button className="button button-dark" type="submit">{editingQuoteId ? "Salvar alterações" : "Salvar orçamento"}</button>{editingQuoteId && <button className="quote-cancel-edit" type="button" onClick={resetQuoteDraft}>Cancelar edição</button>}</div>
             </form>
-            {!operations.quotes.length ? <div className="admin-empty-state"><span>▧</span><h3>Nenhum orçamento salvo</h3><p>Os orçamentos são sincronizados com a loja. Use Imprimir / PDF para salvar uma cópia pelo dispositivo.</p></div> : <div className="quote-list">{operations.quotes.map((quote) => { const items = quoteLineItems(quote); const total = quoteTotalCents(quote); const remaining = Math.max(0, total - quote.depositCents); return <article key={quote.id} className={`quote-card ${printingQuoteId === quote.id ? "print-selected" : ""}`}><div className="quote-card-head"><div><span className="quote-id">{quote.id}</span><h3>{quote.customerName}</h3><small>{new Date(quote.createdAt).toLocaleDateString("pt-BR")}</small></div><span className={`quote-status ${quote.status === "Aprovado" ? "approved" : ""}`}>{quote.status}</span></div><div className="quote-card-body">{items.map((item, index) => <div className="quote-line" key={`${quote.id}-item-${index}`}><span>{item.quantity} × {item.description}<small className="quote-unit-price">{formatPrice(item.unitPriceCents)} cada</small></span><strong>{formatPrice(item.quantity * item.unitPriceCents)}</strong></div>)}<div className="quote-detail-row quote-total-row"><strong>Total</strong><strong>{formatPrice(total)}</strong></div>{quote.depositCents > 0 && <><div className="quote-detail-row"><span>Sinal solicitado</span><span>{formatPrice(quote.depositCents)}</span></div><div className="quote-detail-row"><span>Saldo restante</span><span>{formatPrice(remaining)}</span></div></>}{quote.validUntil && <div className="quote-detail-row"><span>Validade</span><span>{new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.deliveryDate && <div className="quote-detail-row"><span>Entrega prevista</span><span>{new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.notes && <p className="quote-notes">{quote.notes}</p>}</div><div className="quote-card-actions"><label className="quote-status-control">Status<select aria-label={`Status do orçamento ${quote.id}`} data-quote-id={quote.id} value={quote.status} disabled={quote.status === "Convertido em pedido"} onChange={updateQuoteStatus}>{["Em aberto", "Aprovado", "Recusado", "Convertido em pedido"].map((status) => <option key={status}>{status}</option>)}</select></label>{quote.status === "Em aberto" && <button type="button" onClick={() => editQuote(quote)}>Editar</button>}<button type="button" onClick={() => sendQuoteToWhatsApp(quote)}>WhatsApp</button><button type="button" onClick={() => printQuote(quote.id)}>Imprimir / PDF</button>{confirmQuoteDeleteId === quote.id ? <span className="quote-delete-confirm">Remover este orçamento?<button type="button" onClick={() => confirmDeleteQuote(quote.id)}>Confirmar</button><button type="button" onClick={() => setConfirmQuoteDeleteId("")}>Cancelar</button></span> : <button type="button" onClick={() => deleteQuote(quote.id)}>Excluir</button>}</div></article>; })}</div>}
+            {!operations.quotes.length ? <div className="admin-empty-state"><span>▧</span><h3>Nenhum orçamento salvo</h3><p>Os orçamentos são sincronizados com a loja. Baixe o PDF ou use impressão para salvar uma cópia.</p></div> : <div className="quote-list">{operations.quotes.map((quote) => { const items = quoteLineItems(quote); const total = quoteTotalCents(quote); const remaining = Math.max(0, total - quote.depositCents); return <article key={quote.id} className={`quote-card ${printingQuoteId === quote.id ? "print-selected" : ""}`}><div className="quote-card-head"><div><span className="quote-id">{quote.id}</span><h3>{quote.customerName}</h3><small>{new Date(quote.createdAt).toLocaleDateString("pt-BR")}</small></div><span className={`quote-status ${quote.status === "Aprovado" ? "approved" : ""}`}>{quote.status}</span></div><div className="quote-card-body">{items.map((item, index) => <div className="quote-line" key={`${quote.id}-item-${index}`}><span>{item.quantity} × {item.description}{item.variantLabel ? ` · ${item.variantLabel}` : ""}<small className="quote-unit-price">{formatPrice(item.unitPriceCents)} cada</small></span><strong>{formatPrice(item.quantity * item.unitPriceCents)}</strong></div>)}<div className="quote-detail-row quote-total-row"><strong>Total</strong><strong>{formatPrice(total)}</strong></div>{quote.depositCents > 0 && <><div className="quote-detail-row"><span>Sinal solicitado</span><span>{formatPrice(quote.depositCents)}</span></div><div className="quote-detail-row"><span>Saldo restante</span><span>{formatPrice(remaining)}</span></div></>}{quote.validUntil && <div className="quote-detail-row"><span>Validade</span><span>{new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.deliveryDate && <div className="quote-detail-row"><span>Entrega prevista</span><span>{new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.notes && <p className="quote-notes">{quote.notes}</p>}</div><div className="quote-card-actions"><label className="quote-status-control">Status<select aria-label={`Status do orçamento ${quote.id}`} data-quote-id={quote.id} value={quote.status} disabled={quote.status === "Convertido em pedido"} onChange={updateQuoteStatus}>{["Em aberto", "Aprovado", "Recusado", "Convertido em pedido"].map((status) => <option key={status}>{status}</option>)}</select></label>{quote.status === "Em aberto" && <button type="button" onClick={() => editQuote(quote)}>Editar</button>}<button type="button" onClick={() => sendQuoteToWhatsApp(quote)}>WhatsApp</button><button type="button" disabled={exportingQuoteId === quote.id} onClick={() => void downloadQuotePdf(quote)}>{exportingQuoteId === quote.id ? "Gerando PDF…" : "Baixar PDF"}</button><button type="button" onClick={() => printQuote(quote.id)}>Imprimir</button>{confirmQuoteDeleteId === quote.id ? <span className="quote-delete-confirm">Remover este orçamento?<button type="button" onClick={() => confirmDeleteQuote(quote.id)}>Confirmar</button><button type="button" onClick={() => setConfirmQuoteDeleteId("")}>Cancelar</button></span> : <button type="button" onClick={() => deleteQuote(quote.id)}>Excluir</button>}</div></article>; })}</div>}
           </section>}
           {section === "coupons" && <section className="admin-catalog" id="coupons"><div className="admin-section-head"><div><p className="eyebrow">PROMOÇÕES DA VITRINE</p><h2>Cupons de desconto</h2><p>Cupons ativos podem ser aplicados na sacola e sincronizam com a vitrine.</p></div></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
