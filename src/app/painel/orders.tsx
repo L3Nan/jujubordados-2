@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { formatPrice, type StoreProduct } from "@/data/catalog";
+import { formatPrice, storeProfile as initialStoreProfile, type StoreProduct, type StoreProfile } from "@/data/catalog";
 import type { StoreCategory } from "@/data/store-catalog";
 import AdminPanel from "./panel";
 
@@ -26,7 +26,8 @@ export default function AdminOrders() {
   const [notice, setNotice] = useState("");
   const [catalog, setCatalog] = useState<StoreProduct[]>([]);
   const [categories, setCategories] = useState<StoreCategory[]>([]);
-  const [view, setView] = useState<"orders" | "catalog" | "management">("orders");
+  const [profile, setProfile] = useState<StoreProfile>(initialStoreProfile);
+  const [view, setView] = useState<"orders" | "catalog" | "configuration" | "management">("orders");
   const [catalogNotice, setCatalogNotice] = useState("");
   const [pushConfigured, setPushConfigured] = useState(false);
   const [pushSubscribed, setPushSubscribed] = useState(false);
@@ -92,8 +93,8 @@ export default function AdminOrders() {
     let mounted = true;
     void fetch("/api/store/catalog", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error();
-      const data = await response.json() as { products: StoreProduct[]; categories: StoreCategory[] };
-      if (mounted) { setCatalog(data.products); setCategories(data.categories); }
+      const data = await response.json() as { products: StoreProduct[]; categories: StoreCategory[]; profile?: StoreProfile };
+      if (mounted) { setCatalog(data.products); setCategories(data.categories); setProfile(data.profile ?? initialStoreProfile); }
     }).catch(() => { if (mounted) setCatalogNotice("Não foi possível carregar o catálogo compartilhado."); });
     return () => { mounted = false; };
   }, [authenticated]);
@@ -178,11 +179,20 @@ export default function AdminOrders() {
 
   async function saveCatalog() {
     setCatalogNotice("Salvando no banco...");
-    const response = await fetch("/api/admin/catalog", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ products: catalog, categories }) });
+    const response = await fetch("/api/admin/catalog", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ products: catalog, categories, profile }) });
     if (response.status === 401) { setAuthenticated(false); setCatalogNotice("Sessão expirada. Entre novamente."); return; }
     if (!response.ok) { setCatalogNotice("Não foi possível salvar. Confira nomes, categorias, preços e imagens."); return; }
     setCatalogNotice("Catálogo salvo e sincronizado com a vitrine.");
   }
+
+  const saveStoreProfile = saveCatalog;
+  const setupChecks = [
+    { label: "Nome e apresentação da loja", done: Boolean(profile.name.trim() && profile.tagline.trim()), destination: "configuration" as const },
+    { label: "WhatsApp da loja", done: Boolean(profile.whatsappNumber.replace(/\D/g, "")), destination: "configuration" as const },
+    { label: "Produto publicado com preço e descrição", done: catalog.some((product) => product.isActive !== false && product.name.trim() && product.description.trim() && product.sizes.some((size) => size.priceCents > 0)), destination: "catalog" as const },
+    { label: "Formas de pagamento informadas", done: profile.paymentMethods.length > 0, destination: "configuration" as const },
+    { label: "Entrega e retirada disponíveis", done: true, destination: "management" as const },
+  ];
 
   function addProduct() {
     if (!categories.length) { setCatalogNotice("Cadastre uma categoria antes de adicionar produtos."); return; }
@@ -227,9 +237,21 @@ export default function AdminOrders() {
   const notificationPermission = typeof window !== "undefined" && "Notification" in window ? window.Notification.permission : "unsupported";
   return (
     <main className="admin-orders-page">
-      <header className="admin-orders-header"><div><Link className="admin-back-link" href="/">← Vitrine</Link><p className="eyebrow">Gestão da loja</p><h1>{view === "orders" ? "Pedidos recebidos" : view === "catalog" ? "Catálogo compartilhado" : "Gestão completa"}</h1></div><button className="admin-logout" type="button" onClick={signOut}>Sair</button></header>
-      <nav className="admin-orders-tabs" aria-label="Seções do painel"><button type="button" className={view === "orders" ? "selected" : ""} onClick={() => setView("orders")}>Pedidos</button><button type="button" className={view === "catalog" ? "selected" : ""} onClick={() => setView("catalog")}>Produtos e categorias</button><button type="button" className={view === "management" ? "selected" : ""} onClick={() => setView("management")}>Financeiro e ferramentas</button></nav>
-      {view === "management" ? <AdminPanel /> : view === "catalog" ? <section className="admin-catalog-editor">
+      <header className="admin-orders-header"><div><Link className="admin-back-link" href="/">← Vitrine</Link><p className="eyebrow">Gestão da loja</p><h1>{view === "orders" ? "Pedidos recebidos" : view === "catalog" ? "Catálogo compartilhado" : view === "configuration" ? "Configuração da loja" : "Gestão completa"}</h1></div><button className="admin-logout" type="button" onClick={signOut}>Sair</button></header>
+      <nav className="admin-orders-tabs" aria-label="Seções do painel"><button type="button" className={view === "orders" ? "selected" : ""} onClick={() => setView("orders")}>Pedidos</button><button type="button" className={view === "catalog" ? "selected" : ""} onClick={() => setView("catalog")}>Produtos e categorias</button><button type="button" className={view === "configuration" ? "selected" : ""} onClick={() => setView("configuration")}>Configuração da loja</button><button type="button" className={view === "management" ? "selected" : ""} onClick={() => setView("management")}>Financeiro e ferramentas</button></nav>
+      {view === "management" ? <AdminPanel /> : view === "configuration" ? <section className="admin-profile-editor">
+        <div><p className="eyebrow">Informações públicas</p><h2>Apresente sua loja</h2><p>Os dados salvos aparecem na vitrine e ajudam o cliente a combinar o pedido.</p></div>
+        {catalogNotice && <p className="admin-notice" role="status">{catalogNotice}</p>}
+        <div className="admin-profile-fields">
+          <label>Nome da loja<input maxLength={80} value={profile.name} onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))} /></label>
+          <label>Apresentação<textarea maxLength={180} rows={3} value={profile.tagline} onChange={(event) => setProfile((current) => ({ ...current, tagline: event.target.value }))} /></label>
+          <label>WhatsApp com código do país<input inputMode="tel" placeholder="5511999999999" value={profile.whatsappNumber} onChange={(event) => setProfile((current) => ({ ...current, whatsappNumber: event.target.value }))} /><small>Use DDI + DDD + número, somente para contato de pedidos.</small></label>
+          <label>Instagram (link HTTPS)<input type="url" placeholder="https://instagram.com/sualoja" value={profile.instagram} onChange={(event) => setProfile((current) => ({ ...current, instagram: event.target.value }))} /></label>
+          <label>TikTok (link HTTPS)<input type="url" placeholder="https://tiktok.com/@sualoja" value={profile.tiktok} onChange={(event) => setProfile((current) => ({ ...current, tiktok: event.target.value }))} /></label>
+          <fieldset><legend>Formas aceitas (informativas)</legend>{(["Pix", "Dinheiro", "Cartão", "A combinar"] as const).map((method) => <label className="admin-payment-option" key={method}><input type="checkbox" checked={profile.paymentMethods.includes(method)} onChange={(event) => setProfile((current) => ({ ...current, paymentMethods: event.target.checked ? [...current.paymentMethods, method] : current.paymentMethods.filter((item) => item !== method) }))} />{method}</label>)}<small>O pagamento continua combinado diretamente com a loja; o site não processa transações.</small></fieldset>
+        </div>
+        <button className="button button-rose admin-save-catalog" type="button" onClick={() => void saveStoreProfile()}>Salvar configuração <span aria-hidden="true">↗</span></button>
+      </section> : view === "catalog" ? <section className="admin-catalog-editor">
         <div className="admin-catalog-editor-head"><div><p className="eyebrow">Dados publicados na vitrine</p><h2>Produtos</h2></div><button className="button button-dark" type="button" onClick={addProduct}>Adicionar produto <span aria-hidden="true">＋</span></button></div>
         {catalogNotice && <p className="admin-notice" role="status">{catalogNotice}</p>}
         <div className="admin-category-editor"><div className="admin-catalog-editor-head"><h3>Categorias</h3><button type="button" onClick={addCategory}>Adicionar categoria ＋</button></div>{categories.map((category) => <label key={category.id}>Categoria<input value={category.name} maxLength={80} onChange={(event) => updateCategory(category.id, event.target.value)} /></label>)}</div>
@@ -248,6 +270,7 @@ export default function AdminOrders() {
         </article>)}</div>
         <button className="button button-rose admin-save-catalog" type="button" onClick={() => void saveCatalog()}>Salvar catálogo compartilhado <span aria-hidden="true">↗</span></button>
       </section> : <>
+      <section className="admin-setup-card" aria-labelledby="setup-title"><div className="admin-setup-heading"><div><p className="eyebrow">Primeiros passos</p><h2 id="setup-title">Prepare sua vitrine</h2></div><strong>{setupChecks.filter((item) => item.done).length}/{setupChecks.length}</strong></div><div className="admin-setup-progress" role="progressbar" aria-label="Configuração da loja" aria-valuemin={0} aria-valuemax={setupChecks.length} aria-valuenow={setupChecks.filter((item) => item.done).length}><span style={{ width: `${setupChecks.filter((item) => item.done).length / setupChecks.length * 100}%` }} /></div><ul>{setupChecks.map((item) => <li key={item.label}><span aria-hidden="true" className={item.done ? "complete" : "pending"}>{item.done ? "✓" : "○"}</span><span>{item.label}</span><button type="button" onClick={() => setView(item.destination)}>{item.done ? "Revisar" : "Configurar"}</button></li>)}</ul></section>
       <section className="admin-orders-summary" aria-label="Resumo de pedidos"><article><span>Pedidos registrados</span><strong>{orders.length}</strong></article><article><span>Aguardando atendimento</span><strong>{newOrders}</strong></article></section>
       {notice && <p className="admin-notice" role="status">{notice}</p>}
       <section className="order-notification-settings" aria-label="Avisos de novos pedidos"><div><strong>Avisos de novos pedidos</strong><p>{pushConfigured ? "Receba avisos mesmo com o painel fechado, neste navegador e dispositivo." : "O aviso em segundo plano depende da configuração segura do servidor. Com o painel aberto, os avisos do navegador continuam disponíveis."}</p></div><div className="notification-actions">{pushConfigured ? <button className="button button-light" type="button" disabled={pushBusy} onClick={() => void setBackgroundPush(!pushSubscribed)}>{pushBusy ? "Salvando..." : pushSubscribed ? "Desativar neste dispositivo" : "Ativar neste dispositivo"}</button> : notificationPermission === "granted" ? <span className="notification-enabled" role="status">Permissão do navegador ativa</span> : notificationPermission === "unsupported" ? <span className="admin-muted">Notificações indisponíveis neste navegador</span> : <button className="button button-light" type="button" onClick={() => void enableNotifications()}>{notificationPermission === "denied" ? "Como liberar notificações" : "Ativar avisos"}</button>}</div></section>

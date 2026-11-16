@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { formatPrice, products as initialProducts, storeProfile, type StoreProduct } from "@/data/catalog";
+import { formatPrice, products as initialProducts, storeProfile, type StoreProduct, type StoreProfile } from "@/data/catalog";
 import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getServerCategorySnapshot, parseCategories, saveCatalog, saveCategories, subscribeToCatalog, subscribeToCategories } from "@/data/store-catalog";
 import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, saveOperations, subscribeToOperations } from "@/data/store-operations";
 
@@ -19,6 +19,14 @@ type CartLine = {
 };
 
 const CART_STORAGE_KEY = "jujubordados:cart:v1";
+const paymentMethodNames = ["Pix", "Dinheiro", "Cartão", "A combinar"];
+
+function isStoreProfile(value: unknown): value is StoreProfile {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Partial<StoreProfile>;
+  return typeof profile.name === "string" && typeof profile.tagline === "string" && typeof profile.instagram === "string" && typeof profile.tiktok === "string" && typeof profile.whatsappNumber === "string" && Array.isArray(profile.paymentMethods) && profile.paymentMethods.every((method) => paymentMethodNames.includes(method));
+}
+
 let memoryCartSnapshot = "[]";
 const cartListeners = new Set<() => void>();
 
@@ -105,6 +113,7 @@ function ProductCard({ product, onChoose }: { product: StoreProduct; onChoose: (
 }
 
 export default function Storefront() {
+  const [profile, setProfile] = useState<StoreProfile>(storeProfile);
   const catalogSnapshot = useSyncExternalStore(subscribeToCatalog, getCatalogSnapshot, getServerCatalogSnapshot);
   const products = useMemo<StoreProduct[]>(() => {
     try {
@@ -156,10 +165,11 @@ export default function Storefront() {
     let mounted = true;
     void fetch("/api/store/catalog", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) return;
-      const data = await response.json() as { products?: unknown; categories?: unknown };
+      const data = await response.json() as { products?: unknown; categories?: unknown; profile?: unknown };
       if (!mounted || !Array.isArray(data.products) || !Array.isArray(data.categories)) return;
       saveCatalog(data.products as StoreProduct[]);
       saveCategories(data.categories as ReturnType<typeof parseCategories>);
+      if (isStoreProfile(data.profile)) setProfile(data.profile);
     }).catch(() => { /* Keep the bundled catalog if the shared database is temporarily unavailable. */ });
     return () => { mounted = false; };
   }, []);
@@ -304,14 +314,14 @@ export default function Storefront() {
   }
 
   function buildWhatsAppHref() {
-    const phone = storeProfile.whatsappNumber.replace(/\D/g, "");
+    const phone = profile.whatsappNumber.replace(/\D/g, "");
     if (!phone || cart.length === 0) return undefined;
     const lines = cart.map((line) => `• ${line.quantity}× ${line.name} — ${line.size}${line.color ? `, ${line.color}` : ""} — ${formatPrice(line.unitPriceCents * line.quantity)}`);
     const couponLine = appliedCoupon ? `\nCupom ${appliedCoupon.code}: -${formatPrice(couponDiscountCents)}` : "";
     const deliveryLine = deliveryMode === "pickup" ? "Retirada: na loja (combinar horário)" : `Entrega: ${customerAddress}, ${customerCity}/${customerState} · CEP ${customerCep}${matchedShippingRule ? ` · frete ${formatPrice(matchedShippingRule.priceCents)} (${matchedShippingRule.label})` : " · frete a confirmar com a loja"}`;
     const grandTotal = checkoutTotalCents + (shippingCents ?? 0);
     const customerLine = customerName.trim() ? `\nCliente: ${customerName.trim()}${customerPhone.trim() ? ` · ${customerPhone.trim()}` : ""}` : "";
-    const message = `Olá! Gostaria de pedir na ${storeProfile.name}:${customerLine}\n\n${lines.join("\n")}\n\nSubtotal: ${formatPrice(totalPriceCents)}${couponLine}\n${deliveryLine}\nTotal estimado: ${formatPrice(grandTotal)}\n\nPode me orientar sobre disponibilidade e entrega?`;
+    const message = `Olá! Gostaria de pedir na ${profile.name}:${customerLine}\n\n${lines.join("\n")}\n\nSubtotal: ${formatPrice(totalPriceCents)}${couponLine}\n${deliveryLine}\nTotal estimado: ${formatPrice(grandTotal)}\n\nPode me orientar sobre disponibilidade e entrega?`;
     return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
   }
 
@@ -464,7 +474,7 @@ export default function Storefront() {
         <div className="hero-copy">
           <p className="eyebrow"><span className="eyebrow-dot" /> Ateliê de bordados personalizados</p>
           <h1 id="hero-title">Bordados para<br /><em>momentos únicos.</em></h1>
-          <p className="hero-description">{storeProfile.tagline} Peças personalizadas com delicadeza para celebrar as histórias que merecem ficar.</p>
+          <p className="hero-description">{profile.tagline} Peças personalizadas com delicadeza para celebrar as histórias que merecem ficar.</p>
           <div className="hero-actions"><a className="button button-dark" href="#catalogo">Conheça a coleção <span aria-hidden="true">↗</span></a><span>Personalização feita com carinho</span></div>
           <div className="hero-note"><span className="note-line" /> Encontre uma peça para presentear ou guardar</div>
         </div>
@@ -511,13 +521,13 @@ export default function Storefront() {
 
       <section className="story" id="sobre" aria-labelledby="story-title">
         <Image className="story-logo" src="/brand/logo.jpg" alt="Marca ilustrada do Ateliê Jujubordados" width={176} height={176} />
-        <div className="story-copy"><p className="eyebrow">Ateliê de bordados personalizados</p><h2 id="story-title">Cada bordado<br /><em>conta uma história.</em></h2><p>{storeProfile.tagline} Transformamos peças especiais em lembranças únicas, feitas com delicadeza, capricho e amor em cada detalhe.</p></div>
+        <div className="story-copy"><p className="eyebrow">Ateliê de bordados personalizados</p><h2 id="story-title">Cada bordado<br /><em>conta uma história.</em></h2><p>{profile.tagline} Transformamos peças especiais em lembranças únicas, feitas com delicadeza, capricho e amor em cada detalhe.</p></div>
         <span className="story-ornament" aria-hidden="true">✿</span>
       </section>
 
       <footer className="site-footer">
         <a className="brand footer-brand" href="#inicio"><Image className="brand-logo" src="/brand/logo.jpg" alt="" width={34} height={34} /><span className="brand-name">jujubordados<span className="brand-period">.</span></span></a>
-        <div className="social-links"><a href={storeProfile.instagram} target="_blank" rel="noreferrer">Instagram ↗</a><a href={storeProfile.tiktok} target="_blank" rel="noreferrer">TikTok ↗</a></div>
+        <div className="social-links">{profile.instagram && <a href={profile.instagram} target="_blank" rel="noreferrer">Instagram ↗</a>}{profile.tiktok && <a href={profile.tiktok} target="_blank" rel="noreferrer">TikTok ↗</a>}</div>
         <a className="back-top" href="#inicio">Voltar ao início ↑</a>
         <p className="footer-copy">© 2026 JUJUBORDADOS</p>
       </footer>
@@ -553,8 +563,9 @@ export default function Storefront() {
               <div className="checkout-customer-fields"><label>Seu nome<input required autoComplete="name" value={customerName} onChange={(event) => setCustomerName(event.target.value)} /></label><label>WhatsApp para contato<input required type="tel" inputMode="tel" autoComplete="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} /></label></div>
               <div className="cart-total"><span>Subtotal dos itens</span><strong>{formatPrice(totalPriceCents)}</strong></div>{couponDiscountCents > 0 && <div className="cart-discount"><span>Desconto · {appliedCoupon?.code}</span><strong>−{formatPrice(couponDiscountCents)}</strong></div>}{deliveryMode === "delivery" && matchedShippingRule && <div className="cart-total"><span>Frete · {matchedShippingRule.label}</span><strong>{formatPrice(matchedShippingRule.priceCents)}</strong></div>}<div className="cart-total cart-grand-total"><span>{deliveryMode === "delivery" && !matchedShippingRule ? "Total dos itens · frete a confirmar" : "Total estimado"}</span><strong>{formatPrice(checkoutTotalCents + (shippingCents ?? 0))}</strong></div><p className="cart-shipping-note">{deliveryMode === "pickup" ? "Retirada sem custo de frete; horário será combinado com a loja." : matchedShippingRule ? "Frete calculado pela regra cadastrada; confirme disponibilidade com a loja." : "Não encontramos regra para esta região. O frete será confirmado com a loja no WhatsApp."}</p>
               {checkoutError && <p className="checkout-error" role="alert">{checkoutError}</p>}
+              <p className="cart-shipping-note">Formas de pagamento combinadas com a loja: {profile.paymentMethods.length ? profile.paymentMethods.join(" · ") : "a confirmar no atendimento"}. Nenhum pagamento é processado neste site.</p>
               <p className="cart-shipping-note">Seus dados serão usados para registrar e combinar este pedido com a loja.</p>
-              <button className="button button-rose checkout-button" type="submit">{storeProfile.whatsappNumber ? "Registrar e enviar ao WhatsApp" : "Registrar pedido"} <span aria-hidden="true">↗</span></button>
+              <button className="button button-rose checkout-button" type="submit">{profile.whatsappNumber ? "Registrar e enviar ao WhatsApp" : "Registrar pedido"} <span aria-hidden="true">↗</span></button>
             </form>
           </>}
         </div>

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { isAdminSession } from "@/lib/admin-auth";
-import type { StoreProduct } from "@/data/catalog";
+import type { StoreProduct, StoreProfile } from "@/data/catalog";
 import type { StoreCategory } from "@/data/store-catalog";
 
 function validProducts(value: unknown, categories: StoreCategory[]): value is StoreProduct[] {
@@ -39,23 +39,42 @@ function validCategories(value: unknown): value is StoreCategory[] {
   return value.every((item) => !item.parentId || value.some((parent) => parent.id === item.parentId && parent.parentId === null));
 }
 
+const paymentMethodOptions = ["Pix", "Dinheiro", "Cartão", "A combinar"] as const;
+
+function validStoreProfile(value: unknown): value is StoreProfile {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Partial<StoreProfile>;
+  const validSocial = (link: unknown) => typeof link === "string" && link.length <= 300 && (!link || (() => { try { return new URL(link).protocol === "https:"; } catch { return false; } })());
+  return typeof profile.name === "string" && profile.name.trim().length > 0 && profile.name.length <= 80
+    && typeof profile.tagline === "string" && profile.tagline.length <= 180
+    && validSocial(profile.instagram) && validSocial(profile.tiktok)
+    && typeof profile.whatsappNumber === "string" && profile.whatsappNumber.length <= 20
+    && (!profile.whatsappNumber || /^55\d{10,11}$/.test(profile.whatsappNumber.replace(/\D/g, "")))
+    && Array.isArray(profile.paymentMethods) && profile.paymentMethods.length <= paymentMethodOptions.length
+    && profile.paymentMethods.every((method) => (paymentMethodOptions as readonly string[]).includes(method))
+    && new Set(profile.paymentMethods).size === profile.paymentMethods.length;
+}
+
 export async function PUT(request: Request) {
   if (!await isAdminSession(request)) return Response.json({ error: "unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   const contentLength = Number(request.headers.get("Content-Length") ?? 0);
   if (contentLength > 600_000) return Response.json({ error: "catalog_too_large" }, { status: 413 });
-  let body: { products?: unknown; categories?: unknown };
-  try { body = await request.json() as { products?: unknown; categories?: unknown }; } catch { return Response.json({ error: "invalid_json" }, { status: 400 }); }
+  let body: { products?: unknown; categories?: unknown; profile?: unknown };
+  try { body = await request.json() as { products?: unknown; categories?: unknown; profile?: unknown }; } catch { return Response.json({ error: "invalid_json" }, { status: 400 }); }
   if (!validCategories(body.categories) || !validProducts(body.products, body.categories)) return Response.json({ error: "invalid_catalog" }, { status: 400 });
+  if (body.profile !== undefined && !validStoreProfile(body.profile)) return Response.json({ error: "invalid_store_profile" }, { status: 400 });
   if (new TextEncoder().encode(JSON.stringify(body)).byteLength > 600_000) return Response.json({ error: "catalog_too_large" }, { status: 413 });
   try {
-    await env.DB.batch([
+    const statements = [
       env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('catalog', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").bind(JSON.stringify(body.products)),
       env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('categories', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at").bind(JSON.stringify(body.categories)),
       ...body.products.map((product) => product.stockQuantity === undefined
         ? env.DB.prepare("DELETE FROM product_inventory WHERE product_id = ?").bind(product.id)
         : env.DB.prepare(`INSERT INTO product_inventory (product_id, stock_quantity, low_stock_threshold) VALUES (?, ?, ?)
           ON CONFLICT(product_id) DO UPDATE SET stock_quantity = excluded.stock_quantity, low_stock_threshold = excluded.low_stock_threshold, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`).bind(product.id, product.stockQuantity, product.lowStockThreshold ?? 0)),
-    ]);
+    ];
+    if (body.profile !== undefined) statements.push(env.DB.prepare("INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('profile', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_at=excluded.updated_at").bind(JSON.stringify(body.profile)));
+    await env.DB.batch(statements);
     return Response.json({ saved: true }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "catalog_save_failed" }, { status: 503 });

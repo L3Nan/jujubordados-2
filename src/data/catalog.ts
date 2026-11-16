@@ -26,6 +26,15 @@ export type StoreProduct = {
   sourceNote?: string;
 };
 
+export type StoreProfile = {
+  name: string;
+  tagline: string;
+  instagram: string;
+  tiktok: string;
+  whatsappNumber: string;
+  paymentMethods: Array<"Pix" | "Dinheiro" | "Cartão" | "A combinar">;
+};
+
 export const categories = [
   "Maternidade acessórios",
   "Porta documentos",
@@ -75,12 +84,13 @@ export const products: StoreProduct[] = [
   },
 ];
 
-export const storeProfile = {
+export const storeProfile: StoreProfile = {
   name: "JUJUBORDADOS",
   tagline: "Cada ponto, um carinho. Cada bordado, uma história!",
   instagram: "https://instagram.com/jujubordados",
   tiktok: "https://tiktok.com/@jujubordados",
   whatsappNumber: process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "",
+  paymentMethods: [],
 };
 
 export const formatPrice = (priceCents: number) =>
