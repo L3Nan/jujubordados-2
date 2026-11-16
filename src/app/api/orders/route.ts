@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { randomUUID } from "node:crypto";
+import { products as catalog } from "@/data/catalog";
 
 export const runtime = "edge";
 
@@ -51,16 +52,24 @@ export async function POST(request: Request) {
   const parsedItems = items.map((item) => {
     if (typeof item !== "object" || item === null) return null;
     const row = item as Record<string, unknown>;
-    const unitPriceCents = cents(row.unitPriceCents);
+    const requestedPriceCents = cents(row.unitPriceCents);
     const quantity = row.quantity;
-    if (!text(row.productId, 100) || !text(row.name, 160) || unitPriceCents === null || typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) return null;
-    return { productId: text(row.productId, 100), name: text(row.name, 160), unitPriceCents, quantity, size: text(row.size, 60), color: text(row.color, 80) };
+    const productId = text(row.productId, 100);
+    const product = catalog.find((entry) => entry.id === productId && entry.isActive !== false);
+    const size = text(row.size, 60);
+    const option = product?.sizes.find((entry) => entry.label === size);
+    if (!product || product.stockQuantity === 0 || !option || requestedPriceCents !== option.priceCents || text(row.name, 160) !== product.name || typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100 || (product.stockQuantity !== undefined && product.stockQuantity > 0 && quantity > product.stockQuantity)) return null;
+    const color = text(row.color, 80);
+    if (product.colors.length && !product.colors.includes(color)) return null;
+    return { productId, name: product.name, unitPriceCents: option.priceCents, quantity, size, color };
   });
 
   if (parsedItems.some((item) => item === null)) return Response.json({ error: "invalid_order_items" }, { status: 400 });
   const normalizedItems = parsedItems.filter((item): item is NonNullable<typeof item> => item !== null);
   const calculatedSubtotal = normalizedItems.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0);
-  if (calculatedSubtotal !== subtotalCents || discountCents > subtotalCents || totalCents < subtotalCents - discountCents) {
+  const expectedShipping = deliveryMode === "pickup" ? 0 : null;
+  const expectedTotal = calculatedSubtotal - discountCents + (shippingCents ?? 0);
+  if (calculatedSubtotal !== subtotalCents || discountCents !== 0 || shippingCents !== expectedShipping || totalCents !== expectedTotal || (deliveryMode === "delivery" && (!text(input.address, 240) || !text(input.city, 100) || !/^[a-z]{2}$/i.test(text(input.state, 2)))) ) {
     return Response.json({ error: "invalid_order_total" }, { status: 400 });
   }
 

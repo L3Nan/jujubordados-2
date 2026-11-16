@@ -146,6 +146,7 @@ export default function Storefront() {
   const [customerState, setCustomerState] = useState("");
   const [customerCep, setCustomerCep] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
+  const [orderConfirmation, setOrderConfirmation] = useState("");
 
   useEffect(() => {
     if (selectedProduct) productDialog.current?.showModal();
@@ -290,11 +291,9 @@ export default function Storefront() {
     event.preventDefault();
     if (!cart.length) return;
     const whatsappHref = buildWhatsAppHref();
-    if (!whatsappHref) {
-      setCheckoutError("O contato oficial da loja ainda não foi configurado.");
-      return;
-    }
     setCheckoutError("");
+    setOrderConfirmation("");
+    const whatsappWindow = whatsappHref ? window.open("about:blank", "_blank") : null;
     const order = {
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
@@ -313,10 +312,18 @@ export default function Storefront() {
     try {
       const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) });
       if (!response.ok) throw new Error("order_rejected");
-      window.open(whatsappHref, "_blank", "noopener,noreferrer");
+      const result = await response.json() as { id?: string };
+      if (whatsappHref && whatsappWindow) {
+        whatsappWindow.opener = null;
+        whatsappWindow.location.href = whatsappHref;
+      } else if (whatsappWindow) {
+        whatsappWindow.close();
+      }
+      setOrderConfirmation(result.id ? `Pedido ${result.id.slice(0, 8).toUpperCase()} registrado. A loja poderá entrar em contato pelo WhatsApp informado.` : "Pedido registrado com sucesso.");
       updateCart(() => []);
-      setCartDialogOpen(false);
+      if (whatsappHref) setCartDialogOpen(false);
     } catch {
+      whatsappWindow?.close();
       setCheckoutError("Não foi possível registrar o pedido agora. Confira sua conexão e tente novamente.");
     }
   }
@@ -498,6 +505,7 @@ export default function Storefront() {
       <dialog className="cart-dialog" ref={cartDialog} aria-labelledby="cart-title" onClick={(event) => { if (event.target === cartDialog.current) cartDialog.current?.close(); }}>
         <div className="cart-panel"><button className="dialog-close" type="button" onClick={() => cartDialog.current?.close()} aria-label="Fechar sacola">×</button>
           <p className="eyebrow">Seu pedido</p><h2 id="cart-title">Sacola <span>({totalItems})</span></h2>
+          {orderConfirmation && <p className="coupon-success" role="status">{orderConfirmation}</p>}
           {cart.length === 0 ? <div className="cart-empty"><span aria-hidden="true">✳</span><p>Sua sacola ainda está vazia.</p><button className="text-button" type="button" onClick={() => cartDialog.current?.close()}>Continuar escolhendo</button></div> : <>
           <ul className="cart-list">{cart.map((line) => <li className="cart-line" key={line.key}><div className="cart-thumb"><Image src={line.image} alt="" fill sizes="72px" unoptimized={line.image.startsWith("data:")} /></div><div className="cart-line-info"><h3>{line.name}</h3><p>{line.size}{line.color ? ` · ${line.color}` : ""}</p><strong>{formatPrice(line.unitPriceCents * line.quantity)}</strong><div className="cart-line-quantity"><button type="button" onClick={() => updateQuantity(line.key, -1)} aria-label={`Diminuir ${line.name}`}>−</button><span>{line.quantity}</span><button type="button" onClick={() => updateQuantity(line.key, 1)} aria-label={`Aumentar ${line.name}`}>+</button><button className="remove-line" type="button" onClick={() => updateCart((current) => current.filter((item) => item.key !== line.key))}>Remover</button></div></div></li>)}</ul>
             <form className="coupon-entry" onSubmit={(event) => { event.preventDefault(); applyCoupon(); }}><label htmlFor="cart-coupon">Cupom de desconto</label><div><input id="cart-coupon" autoComplete="off" value={couponInput} onChange={(event) => setCouponInput(event.target.value)} placeholder="Digite seu cupom" /><button type="submit">Aplicar</button></div>{couponMessage && <p className={appliedCoupon ? "coupon-success" : "coupon-feedback"} role="status">{couponMessage}</p>}{appliedCoupon && <button className="coupon-remove" type="button" onClick={removeCoupon}>Remover cupom</button>}</form>
@@ -508,7 +516,8 @@ export default function Storefront() {
               <div className="checkout-customer-fields"><label>Seu nome<input required autoComplete="name" value={customerName} onChange={(event) => setCustomerName(event.target.value)} /></label><label>WhatsApp para contato<input required type="tel" inputMode="tel" autoComplete="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} /></label></div>
               <div className="cart-total"><span>Subtotal dos itens</span><strong>{formatPrice(totalPriceCents)}</strong></div>{couponDiscountCents > 0 && <div className="cart-discount"><span>Desconto · {appliedCoupon?.code}</span><strong>−{formatPrice(couponDiscountCents)}</strong></div>}{deliveryMode === "delivery" && matchedShippingRule && <div className="cart-total"><span>Frete · {matchedShippingRule.label}</span><strong>{formatPrice(matchedShippingRule.priceCents)}</strong></div>}<div className="cart-total cart-grand-total"><span>{deliveryMode === "delivery" && !matchedShippingRule ? "Total dos itens · frete a confirmar" : "Total estimado"}</span><strong>{formatPrice(checkoutTotalCents + (shippingCents ?? 0))}</strong></div><p className="cart-shipping-note">{deliveryMode === "pickup" ? "Retirada sem custo de frete; horário será combinado com a loja." : matchedShippingRule ? "Frete calculado pela regra cadastrada; confirme disponibilidade com a loja." : "Não encontramos regra para esta região. O frete será confirmado com a loja no WhatsApp."}</p>
               {checkoutError && <p className="checkout-error" role="alert">{checkoutError}</p>}
-              {storeProfile.whatsappNumber ? <button className="button button-rose checkout-button" type="submit">Enviar pedido para revisão no WhatsApp <span aria-hidden="true">↗</span></button> : <div className="contact-not-configured"><strong>WhatsApp ainda não configurado</strong><span>Adicione o número da loja ao arquivo <code>app/.env.local</code> para ativar o envio do pedido.</span></div>}
+              <p className="cart-shipping-note">Seus dados serão usados para registrar e combinar este pedido com a loja.</p>
+              <button className="button button-rose checkout-button" type="submit">{storeProfile.whatsappNumber ? "Registrar e enviar ao WhatsApp" : "Registrar pedido"} <span aria-hidden="true">↗</span></button>
             </form>
           </>}
         </div>
