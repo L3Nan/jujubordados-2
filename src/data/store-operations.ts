@@ -71,10 +71,11 @@ export type LocalShippingRule = {
   active: boolean;
 };
 
-type Operations = { orders: LocalOrder[]; customers: LocalCustomer[]; financeEntries: FinanceEntry[]; monthlyGoalCents: number; quotes: LocalQuote[]; coupons: LocalCoupon[]; shippingRules: LocalShippingRule[] };
+export type Operations = { orders: LocalOrder[]; customers: LocalCustomer[]; financeEntries: FinanceEntry[]; monthlyGoalCents: number; quotes: LocalQuote[]; coupons: LocalCoupon[]; shippingRules: LocalShippingRule[] };
 
 const STORAGE_KEY = "jujubordados:operations:v1";
-const EMPTY: Operations = { orders: [], customers: [], financeEntries: [], monthlyGoalCents: 0, quotes: [], coupons: [], shippingRules: [] };
+export const EMPTY_OPERATIONS: Operations = { orders: [], customers: [], financeEntries: [], monthlyGoalCents: 0, quotes: [], coupons: [], shippingRules: [] };
+const EMPTY = EMPTY_OPERATIONS;
 let snapshot = JSON.stringify(EMPTY);
 const listeners = new Set<() => void>();
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { formatPrice, type StoreProduct } from "@/data/catalog";
 import type { StoreCategory } from "@/data/store-catalog";
+import AdminPanel from "./panel";
 
 type OrderItem = { name: string; quantity: number; size: string; color: string; unitPriceCents: number };
 type Order = {
@@ -22,7 +23,7 @@ export default function AdminOrders() {
   const [error, setError] = useState("");
   const [catalog, setCatalog] = useState<StoreProduct[]>([]);
   const [categories, setCategories] = useState<StoreCategory[]>([]);
-  const [view, setView] = useState<"orders" | "catalog">("orders");
+  const [view, setView] = useState<"orders" | "catalog" | "management">("orders");
   const [catalogNotice, setCatalogNotice] = useState("");
 
   const loadOrders = useCallback(async () => {
@@ -130,9 +131,9 @@ export default function AdminOrders() {
   const newOrders = orders.filter((order) => order.status === "Novo").length;
   return (
     <main className="admin-orders-page">
-      <header className="admin-orders-header"><div><Link className="admin-back-link" href="/">← Vitrine</Link><p className="eyebrow">Gestão da loja</p><h1>{view === "orders" ? "Pedidos recebidos" : "Catálogo compartilhado"}</h1></div><button className="admin-logout" type="button" onClick={signOut}>Sair</button></header>
-      <nav className="admin-orders-tabs" aria-label="Seções do painel"><button type="button" className={view === "orders" ? "selected" : ""} onClick={() => setView("orders")}>Pedidos</button><button type="button" className={view === "catalog" ? "selected" : ""} onClick={() => setView("catalog")}>Produtos e categorias</button></nav>
-      {view === "catalog" ? <section className="admin-catalog-editor">
+      <header className="admin-orders-header"><div><Link className="admin-back-link" href="/">← Vitrine</Link><p className="eyebrow">Gestão da loja</p><h1>{view === "orders" ? "Pedidos recebidos" : view === "catalog" ? "Catálogo compartilhado" : "Gestão completa"}</h1></div><button className="admin-logout" type="button" onClick={signOut}>Sair</button></header>
+      <nav className="admin-orders-tabs" aria-label="Seções do painel"><button type="button" className={view === "orders" ? "selected" : ""} onClick={() => setView("orders")}>Pedidos</button><button type="button" className={view === "catalog" ? "selected" : ""} onClick={() => setView("catalog")}>Produtos e categorias</button><button type="button" className={view === "management" ? "selected" : ""} onClick={() => setView("management")}>Financeiro e ferramentas</button></nav>
+      {view === "management" ? <AdminPanel /> : view === "catalog" ? <section className="admin-catalog-editor">
         <div className="admin-catalog-editor-head"><div><p className="eyebrow">Dados publicados na vitrine</p><h2>Produtos</h2></div><button className="button button-dark" type="button" onClick={addProduct}>Adicionar produto <span aria-hidden="true">＋</span></button></div>
         {catalogNotice && <p className="admin-notice" role="status">{catalogNotice}</p>}
         <div className="admin-category-editor"><div className="admin-catalog-editor-head"><h3>Categorias</h3><button type="button" onClick={addCategory}>Adicionar categoria ＋</button></div>{categories.map((category) => <label key={category.id}>Categoria<input value={category.name} maxLength={80} onChange={(event) => updateCategory(category.id, event.target.value)} /></label>)}</div>

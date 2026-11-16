@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { randomUUID } from "node:crypto";
 import { products as initialCatalog, type StoreProduct } from "@/data/catalog";
+import { EMPTY_OPERATIONS, parseOperations } from "@/data/store-operations";
 
 export const runtime = "edge";
 
@@ -50,9 +51,12 @@ export async function POST(request: Request) {
   }
 
   let catalog: StoreProduct[] = initialCatalog;
+  let operations = EMPTY_OPERATIONS;
   try {
     const storedCatalog = await env.DB.prepare("SELECT setting_value FROM store_settings WHERE setting_key = 'catalog'").first<{ setting_value: string }>();
     if (storedCatalog) catalog = JSON.parse(storedCatalog.setting_value) as StoreProduct[];
+    const storedOperations = await env.DB.prepare("SELECT setting_value FROM store_settings WHERE setting_key = 'operations'").first<{ setting_value: string }>();
+    if (storedOperations) operations = parseOperations(storedOperations.setting_value);
   } catch {
     return Response.json({ error: "catalog_unavailable" }, { status: 503 });
   }
@@ -75,16 +79,30 @@ export async function POST(request: Request) {
   if (parsedItems.some((item) => item === null)) return Response.json({ error: "invalid_order_items" }, { status: 400 });
   const normalizedItems = parsedItems.filter((item): item is NonNullable<typeof item> => item !== null);
   const calculatedSubtotal = normalizedItems.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0);
-  const expectedShipping = deliveryMode === "pickup" ? 0 : null;
-  const expectedTotal = calculatedSubtotal - discountCents + (shippingCents ?? 0);
-  if (calculatedSubtotal !== subtotalCents || discountCents !== 0 || shippingCents !== expectedShipping || totalCents !== expectedTotal || (deliveryMode === "delivery" && (!text(input.address, 240) || !text(input.city, 100) || !/^[a-z]{2}$/i.test(text(input.state, 2)))) ) {
+  const couponCode = text(input.couponCode, 40).toLocaleUpperCase("pt-BR");
+  const coupon = couponCode ? operations.coupons.find((entry) => entry.active && entry.code.toLocaleUpperCase("pt-BR") === couponCode) : undefined;
+  const expectedDiscount = coupon ? Math.min(calculatedSubtotal, coupon.discountType === "percentage" ? Math.round(calculatedSubtotal * coupon.amount / 100) : coupon.amount) : 0;
+  const customerCity = text(input.city, 100);
+  const customerState = text(input.state, 2).toUpperCase();
+  const postalCode = text(input.postalCode, 8).replace(/\D/g, "");
+  const specificity: Record<(typeof operations.shippingRules)[number]["matchType"], number> = { cep: 0, city: 1, state: 2, region: 3 };
+  const shippingRule = deliveryMode === "delivery" ? [...operations.shippingRules].filter((rule) => rule.active).sort((a, b) => specificity[a.matchType] - specificity[b.matchType] || b.matchValue.replace(/\D/g, "").length - a.matchValue.replace(/\D/g, "").length).find((rule) => {
+    const value = rule.matchValue.trim();
+    if (rule.matchType === "cep") { const target = value.replace(/\D/g, ""); return target.length === 8 ? postalCode === target : Boolean(target) && postalCode.startsWith(target); }
+    if (rule.matchType === "city") return customerCity.localeCompare(value, "pt-BR", { sensitivity: "base" }) === 0;
+    if (rule.matchType === "state") return customerState.localeCompare(value, "pt-BR", { sensitivity: "base" }) === 0;
+    return value.toLocaleLowerCase("pt-BR") === customerState.toLocaleLowerCase("pt-BR") || value.toLocaleLowerCase("pt-BR") === customerCity.toLocaleLowerCase("pt-BR");
+  }) : undefined;
+  const expectedShipping = deliveryMode === "pickup" ? 0 : shippingRule?.priceCents ?? null;
+  const expectedTotal = calculatedSubtotal - expectedDiscount + (expectedShipping ?? 0);
+  if (calculatedSubtotal !== subtotalCents || (couponCode && !coupon) || discountCents !== expectedDiscount || shippingCents !== expectedShipping || totalCents !== expectedTotal || (deliveryMode === "delivery" && (!text(input.address, 240) || !customerCity || !/^[A-Z]{2}$/.test(customerState)))) {
     return Response.json({ error: "invalid_order_total" }, { status: 400 });
   }
 
   const id = randomUUID();
   const statements = [
     env.DB.prepare("INSERT INTO orders (id, customer_name, customer_phone, delivery_mode, address, city, state, postal_code, subtotal_cents, discount_cents, shipping_cents, total_cents, coupon_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
-      id, customerName, customerPhone, deliveryMode, deliveryMode === "delivery" ? text(input.address, 240) : "", deliveryMode === "delivery" ? text(input.city, 100) : "", deliveryMode === "delivery" ? text(input.state, 2).toUpperCase() : "", deliveryMode === "delivery" ? text(input.postalCode, 8).replace(/\D/g, "") : "", subtotalCents, discountCents, shippingCents, totalCents, text(input.couponCode, 40) || null,
+      id, customerName, customerPhone, deliveryMode, deliveryMode === "delivery" ? text(input.address, 240) : "", deliveryMode === "delivery" ? customerCity : "", deliveryMode === "delivery" ? customerState : "", deliveryMode === "delivery" ? postalCode : "", subtotalCents, discountCents, shippingCents, totalCents, coupon ? coupon.code : null,
     ),
     ...normalizedItems.map((item) => env.DB.prepare("INSERT INTO order_items (order_id, product_id, product_name, unit_price_cents, quantity, size, color) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, item.productId, item.name, item.unitPriceCents, item.quantity, item.size, item.color)),
   ];

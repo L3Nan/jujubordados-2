@@ -5,16 +5,17 @@ import type { StoreCategory } from "@/data/store-catalog";
 
 function validProducts(value: unknown, categories: StoreCategory[]): value is StoreProduct[] {
   if (!Array.isArray(value) || value.length > 150) return false;
-  const categoryNames = new Set(categories.map((category) => category.name));
+  const categoryNames = new Set([...categories.map((category) => category.name), "Sem categoria"]);
   const ids = new Set<string>();
   return value.every((item) => {
     if (!item || typeof item !== "object") return false;
     const product = item as StoreProduct;
-    if (typeof product.id !== "string" || !/^[a-z0-9-]{1,100}$/.test(product.id) || ids.has(product.id)) return false;
+    if (typeof product.id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(product.id) || ids.has(product.id)) return false;
     ids.add(product.id);
     if (typeof product.name !== "string" || !product.name.trim() || product.name.length > 160 || typeof product.category !== "string" || !categoryNames.has(product.category) || typeof product.description !== "string" || product.description.length > 5000) return false;
-    if (typeof product.image !== "string" || product.image.length > 1000 || (!product.image.startsWith("/") && !product.image.startsWith("https://"))) return false;
-    if (product.images !== undefined && (!Array.isArray(product.images) || product.images.length > 12 || product.images.some((image) => typeof image !== "string" || image.length > 1000 || (!image.startsWith("/") && !image.startsWith("https://"))))) return false;
+    const validImage = (image: unknown) => typeof image === "string" && image.length <= 560_000 && (image.startsWith("/") || image.startsWith("https://") || /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(image));
+    if (!validImage(product.image)) return false;
+    if (product.images !== undefined && (!Array.isArray(product.images) || product.images.length > 12 || product.images.some((image) => !validImage(image)))) return false;
     if (!Array.isArray(product.sizes) || product.sizes.length < 1 || product.sizes.length > 30 || product.sizes.some((option) => !option || typeof option.label !== "string" || option.label.length > 60 || !Number.isSafeInteger(option.priceCents) || option.priceCents < 0 || option.priceCents > 100_000_000)) return false;
     if (!Array.isArray(product.colors) || product.colors.length > 40 || product.colors.some((color) => typeof color !== "string" || color.length > 80)) return false;
     if (typeof product.featured !== "boolean" || (product.isActive !== undefined && typeof product.isActive !== "boolean")) return false;
@@ -31,7 +32,7 @@ function validCategories(value: unknown): value is StoreCategory[] {
   for (const item of value) {
     if (!item || typeof item !== "object") return false;
     const category = item as StoreCategory;
-    if (typeof category.id !== "string" || !/^[a-z0-9-]{1,100}$/.test(category.id) || ids.has(category.id) || typeof category.name !== "string" || !category.name.trim() || category.name.length > 80 || (category.parentId !== null && typeof category.parentId !== "string")) return false;
+    if (typeof category.id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(category.id) || ids.has(category.id) || typeof category.name !== "string" || !category.name.trim() || category.name.length > 80 || (category.parentId !== null && typeof category.parentId !== "string")) return false;
     if (names.has(category.name.toLocaleLowerCase("pt-BR"))) return false;
     ids.add(category.id); names.add(category.name.toLocaleLowerCase("pt-BR"));
   }

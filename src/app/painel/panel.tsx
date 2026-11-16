@@ -54,6 +54,7 @@ function subscribeToSection(listener: () => void) {
 }
 
 export default function AdminPanel() {
+  const isProduction = process.env.NODE_ENV === "production";
   const catalogJson = useSyncExternalStore(subscribeToCatalog, getCatalogSnapshot, getServerCatalogSnapshot);
   const catalog = useMemo<StoreProduct[]>(() => {
     try {
@@ -111,6 +112,83 @@ export default function AdminPanel() {
   const [shippingPrice, setShippingPrice] = useState("");
   const [today, setToday] = useState("");
   useEffect(() => { const timer = window.setTimeout(() => setToday(getLocalDateInputValue()), 0); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => {
+    let mounted = true;
+    let hydrating = true;
+    let ready = false;
+    let operationsTimer = 0;
+    let catalogTimer = 0;
+    let pollTimer = 0;
+    let lastSyncedOperations = "";
+    let lastSyncedCatalog = "";
+    let lastSyncedCategories = "";
+
+    const syncOperations = () => {
+      if (!ready || hydrating) return;
+      window.clearTimeout(operationsTimer);
+      operationsTimer = window.setTimeout(() => {
+        const currentOperations = parseOperations(getOperationsSnapshot());
+        void fetch("/api/admin/operations", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations: currentOperations }) }).then((response) => {
+          if (!response.ok && mounted) setNotice("Falha ao salvar os dados operacionais compartilhados.");
+          else if (response.ok) lastSyncedOperations = getOperationsSnapshot();
+        }).catch(() => { if (mounted) setNotice("Falha ao conectar ao banco. As alterações estão apenas neste navegador."); });
+      }, 350);
+    };
+    const syncCatalog = () => {
+      if (!ready || hydrating) return;
+      window.clearTimeout(catalogTimer);
+      catalogTimer = window.setTimeout(() => {
+        const productSnapshot = getCatalogSnapshot();
+        const categorySnapshot = getCategorySnapshot();
+        void fetch("/api/admin/catalog", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ products: JSON.parse(productSnapshot), categories: parseCategories(categorySnapshot) }) }).then((response) => {
+          if (!response.ok && mounted) setNotice("Falha ao salvar o catálogo compartilhado.");
+          else if (response.ok) { lastSyncedCatalog = getCatalogSnapshot(); lastSyncedCategories = getCategorySnapshot(); }
+        }).catch(() => { if (mounted) setNotice("Falha ao conectar ao banco. As alterações estão apenas neste navegador."); });
+      }, 350);
+    };
+    const stopOperations = subscribeToOperations(syncOperations);
+    const stopCatalog = subscribeToCatalog(syncCatalog);
+    const stopCategories = subscribeToCategories(syncCatalog);
+
+    void Promise.all([fetch("/api/admin/operations", { cache: "no-store" }), fetch("/api/store/catalog", { cache: "no-store" })]).then(async ([operationsResponse, catalogResponse]) => {
+      if (!operationsResponse.ok || !catalogResponse.ok) throw new Error("sync_unavailable");
+      const [operationData, catalogData] = await Promise.all([operationsResponse.json(), catalogResponse.json()]) as [{ operations: unknown }, { products: unknown; categories: unknown }];
+      if (!mounted || !Array.isArray(catalogData.products) || !Array.isArray(catalogData.categories)) return;
+      hydrating = true;
+      saveOperations(parseOperations(JSON.stringify(operationData.operations)));
+      saveCatalog(catalogData.products as StoreProduct[]);
+      saveCategories(catalogData.categories as ReturnType<typeof parseCategories>);
+      hydrating = false;
+      ready = true;
+      lastSyncedOperations = getOperationsSnapshot();
+      lastSyncedCatalog = getCatalogSnapshot();
+      lastSyncedCategories = getCategorySnapshot();
+      if (mounted) setNotice("Dados sincronizados com a loja.");
+    }).catch(() => { if (mounted) setNotice("Não foi possível sincronizar. Confira sua conexão e sessão."); });
+
+    const pollSharedData = async () => {
+      if (!ready || document.visibilityState !== "visible") return;
+      try {
+        const [operationsResponse, catalogResponse] = await Promise.all([fetch("/api/admin/operations", { cache: "no-store" }), fetch("/api/store/catalog", { cache: "no-store" })]);
+        if (!operationsResponse.ok || !catalogResponse.ok) return;
+        const [operationData, catalogData] = await Promise.all([operationsResponse.json(), catalogResponse.json()]) as [{ operations: unknown }, { products: unknown; categories: unknown }];
+        if (!Array.isArray(catalogData.products) || !Array.isArray(catalogData.categories)) return;
+        hydrating = true;
+        if (getOperationsSnapshot() === lastSyncedOperations) { saveOperations(parseOperations(JSON.stringify(operationData.operations))); lastSyncedOperations = getOperationsSnapshot(); }
+        if (getCatalogSnapshot() === lastSyncedCatalog) { saveCatalog(catalogData.products as StoreProduct[]); lastSyncedCatalog = getCatalogSnapshot(); }
+        if (getCategorySnapshot() === lastSyncedCategories) { saveCategories(catalogData.categories as ReturnType<typeof parseCategories>); lastSyncedCategories = getCategorySnapshot(); }
+      } catch { /* Keep the last known good local snapshot when the connection drops. */ }
+      finally { hydrating = false; }
+    };
+    pollTimer = window.setInterval(() => { void pollSharedData(); }, 30_000);
+    document.addEventListener("visibilitychange", pollSharedData);
+    return () => {
+      mounted = false;
+      stopOperations(); stopCatalog(); stopCategories();
+      document.removeEventListener("visibilitychange", pollSharedData);
+      window.clearTimeout(operationsTimer); window.clearTimeout(catalogTimer); window.clearInterval(pollTimer);
+    };
+  }, []);
   const filtered = catalog.filter((product) => product.name.toLowerCase().includes(query.toLowerCase()));
   const currentMonthKey = today.slice(0, 7);
   const receivedThisMonth = operations.financeEntries.filter((entry) => entry.kind === "income" && entry.date.startsWith(currentMonthKey)).reduce((sum, entry) => sum + entry.amountCents, 0);
@@ -128,7 +206,7 @@ export default function AdminPanel() {
 
   function updateProduct(id: string, update: Partial<StoreProduct>) {
     saveCatalog(catalog.map((product) => product.id === id ? { ...product, ...update } : product));
-    setNotice("Alteração salva neste navegador.");
+    setNotice("Alteração salva. Sincronizando com a loja...");
     window.setTimeout(() => setNotice(""), 2600);
   }
 
@@ -160,7 +238,7 @@ export default function AdminPanel() {
         return;
       }
       const persisted = saveCatalog(nextCatalog);
-      setNotice(persisted ? files.length > accepted.length ? `Adicionadas ${added.length} fotos. O limite é 5 por produto.` : `${added.length} fotos adicionadas e otimizadas. Só ficam salvas neste navegador.` : "Fotos exibidas nesta sessão, mas o navegador não conseguiu salvá-las. Libere espaço no armazenamento local e tente novamente.");
+      setNotice(persisted ? files.length > accepted.length ? `Adicionadas ${added.length} fotos. O limite é 5 por produto.` : `${added.length} fotos otimizadas. Sincronizando o catálogo com a loja.` : "Fotos exibidas nesta sessão, mas o navegador não conseguiu salvá-las. Libere espaço no armazenamento local e tente novamente.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Não foi possível adicionar as fotos.");
     }
@@ -173,13 +251,13 @@ export default function AdminPanel() {
     const images = (product.images ?? []).filter((_, photoIndex) => photoIndex !== index);
     const fallbackImage = initialProducts.find((item) => item.id === id)?.image ?? product.image;
     saveCatalog(catalog.map((item) => item.id === id ? { ...item, images: images.length ? images : undefined, image: images[0] ?? fallbackImage } : item));
-    setNotice("Foto removida neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Foto removida. Sincronizando o catálogo..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function resetCatalog() {
     saveCatalog(initialProducts);
     saveCategories(parseCategories(getServerCategorySnapshot()));
-    setNotice("Catálogo original restaurado neste navegador.");
+    setNotice("Catálogo atual restaurado. Sincronizando...");
     window.setTimeout(() => setNotice(""), 2600);
   }
 
@@ -234,7 +312,7 @@ export default function AdminPanel() {
     const customers = customerId || !orderPhone.trim() ? operations.customers : [...operations.customers, { id: `CLI-${Date.now().toString().slice(-6)}`, name: orderName.trim(), phone: orderPhone.trim(), email: "", notes: "" }];
     saveOperations({ ...operations, orders: [order, ...operations.orders], customers });
     setShowNewOrder(false); setOrderName(""); setOrderPhone(""); setOrderDescription(""); setOrderTotal("");
-    setNotice("Pedido de demonstração registrado neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Pedido manual registrado. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function createCustomer(event: React.FormEvent<HTMLFormElement>) {
@@ -243,7 +321,7 @@ export default function AdminPanel() {
     const customer: LocalCustomer = { id: `CLI-${Date.now().toString().slice(-6)}`, name: customerName.trim(), phone: customerPhone.trim(), email: customerEmail.trim(), notes: customerNotes.trim() };
     saveOperations({ ...operations, customers: [customer, ...operations.customers] });
     setCustomerName(""); setCustomerPhone(""); setCustomerEmail(""); setCustomerNotes("");
-    setNotice("Cliente de demonstração salvo neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Cliente salvo. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function changeOrderStatus(id: string, status: OrderStatus) {
@@ -292,7 +370,7 @@ export default function AdminPanel() {
     const cents = Math.round(Number(goalAmount.replace(",", ".")) * 100);
     if (!Number.isFinite(cents) || cents < 0) return;
     saveOperations({ ...operations, monthlyGoalCents: cents });
-    setNotice("Meta mensal salva neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Meta mensal salva. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function createQuote(event: React.FormEvent<HTMLFormElement>) {
@@ -307,7 +385,7 @@ export default function AdminPanel() {
     const customer = customerExists || !quotePhone.trim() ? [] : [{ id: `CLI-${Date.now().toString().slice(-6)}`, name: quoteName.trim(), phone: quotePhone.trim(), email: "", notes: "" }];
     saveOperations({ ...operations, quotes: [quote, ...operations.quotes], customers: [...customer, ...operations.customers] });
     setQuoteName(""); setQuotePhone(""); setQuoteItem(""); setQuoteQuantity("1"); setQuotePrice(""); setQuoteValidUntil(""); setQuoteDeliveryDate(""); setQuoteDeposit(""); setQuoteNotes("");
-    setNotice("Orçamento salvo neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Orçamento salvo. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function updateQuoteStatus(event: React.ChangeEvent<HTMLSelectElement>) {
@@ -346,7 +424,7 @@ export default function AdminPanel() {
     const coupon: LocalCoupon = { id: `CUP-${Date.now().toString().slice(-6)}`, code, discountType: couponType, amount: couponType === "fixed" ? Math.round(value * 100) : Math.round(value * 100) / 100, active: true };
     saveOperations({ ...operations, coupons: [coupon, ...operations.coupons] });
     setCouponCode(""); setCouponAmount("");
-    setNotice(`Cupom ${code} criado e ativado neste navegador.`); window.setTimeout(() => setNotice(""), 3000);
+    setNotice(`Cupom ${code} criado. Sincronizando com a vitrine...`); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function toggleCoupon(id: string) {
@@ -374,7 +452,7 @@ export default function AdminPanel() {
     const rule: LocalShippingRule = { id: `FRE-${Date.now().toString().slice(-6)}`, label: shippingLabel.trim(), matchType: shippingMatchType, matchValue: shippingMatchType === "state" ? matchValue.toLocaleUpperCase("pt-BR") : matchValue, priceCents, active: true };
     saveOperations({ ...operations, shippingRules: [rule, ...operations.shippingRules] });
     setShippingLabel(""); setShippingMatchValue(""); setShippingPrice("");
-    setNotice("Regra de entrega salva neste navegador."); window.setTimeout(() => setNotice(""), 3000);
+    setNotice("Regra de entrega salva. Sincronizando..."); window.setTimeout(() => setNotice(""), 3000);
   }
 
   function toggleShippingRule(id: string) {
@@ -399,19 +477,19 @@ export default function AdminPanel() {
         <a className={`admin-side-link ${section === "coupons" ? "active" : ""}`} href="#coupons">% <span>Cupons</span></a>
         <a className={`admin-side-link ${section === "shipping" ? "active" : ""}`} href="#shipping">⌖ <span>Entrega e frete</span></a>
         <a className={`admin-side-link ${section === "finance" ? "active" : ""}`} href="#finance" onClick={openFinance}>◷ <span>Financeiro</span></a>
-        <div className="admin-side-bottom"><span className="admin-avatar">J</span><span><strong>Jujubordados</strong><small>Modo demonstração</small></span></div>
+        <div className="admin-side-bottom"><span className="admin-avatar">J</span><span><strong>Jujubordados</strong><small>{isProduction ? "Painel sincronizado" : "Modo demonstração"}</small></span></div>
       </aside>
       <section className="admin-main">
         <header className="admin-topbar"><span className="admin-breadcrumb">Painel <span>/</span> {section === "overview" ? "Visão geral" : section === "catalog" ? "Catálogo" : section === "categories" ? "Categorias" : section === "orders" ? "Pedidos" : section === "customers" ? "Clientes" : section === "quotes" ? "Orçamentos" : section === "coupons" ? "Cupons" : section === "shipping" ? "Entrega e frete" : "Financeiro"}</span><nav className="admin-topnav" aria-label="Seções do painel">{([ ["overview", "Início"], ["catalog", "Catálogo"], ["categories", "Categorias"], ["orders", "Pedidos"], ["customers", "Clientes"], ["quotes", "Orçamentos"], ["coupons", "Cupons"], ["shipping", "Entrega"], ["finance", "Financeiro"] ] as const).map(([key, label]) => <a key={key} className={section === key ? "active" : ""} href={`#${key}`} aria-current={section === key ? "page" : undefined} onClick={key === "finance" ? openFinance : undefined}>{label}</a>)}</nav><Link href="/" className="admin-store-link">Ver vitrine ↗</Link></header>
         <div className="admin-content">
-          <div className="admin-demo-banner"><span>◉</span><div><strong>Painel de demonstração local</strong><p>Suas edições ficam apenas neste navegador. Ainda não há login, sincronização entre dispositivos ou banco de dados.</p></div><button type="button" onClick={resetCatalog}>Restaurar catálogo original</button></div>
+          {!isProduction && <div className="admin-demo-banner"><span>◉</span><div><strong>Painel de demonstração local</strong><p>Suas edições ficam apenas neste navegador. Ainda não há login, sincronização entre dispositivos ou banco de dados.</p></div><button type="button" onClick={resetCatalog}>Restaurar catálogo original</button></div>}
           {section === "overview" && <>
-          <section className="admin-welcome" id="overview"><div><p className="eyebrow"><span className="eyebrow-dot" /> ESPAÇO DE DEMONSTRAÇÃO</p><h1>Um olhar sobre sua <em>loja.</em></h1><p>Resumo do catálogo e das atividades registradas neste navegador.</p></div><Link className="button button-dark" href="/#catalogo">Abrir vitrine <span>↗</span></Link></section>
-          <div className="admin-metrics overview-metrics"><article><span>Produtos publicados</span><strong>{catalog.filter((product) => product.isActive !== false).length.toString().padStart(2, "0")}</strong><small>No catálogo atual</small></article><article><span>Pedidos registrados</span><strong>{operations.orders.filter((order) => order.status !== "Cancelado").length.toString().padStart(2, "0")}</strong><small>Pedidos ativos</small></article><article><span>Recebido neste mês</span><strong>{formatPrice(receivedThisMonth)}</strong><small>Entradas confirmadas no financeiro</small></article><article><span>A receber</span><strong>{formatPrice(outstandingCents)}</strong><small>{overdueOrdersCount ? `${overdueOrdersCount} pedido(s) vencido(s)` : `${outstandingOrders.length} pedido(s) com saldo`}</small></article><article><span>Clientes cadastradas</span><strong>{operations.customers.length.toString().padStart(2, "0")}</strong><small>Registros locais</small></article></div>
+          <section className="admin-welcome" id="overview"><div><p className="eyebrow"><span className="eyebrow-dot" /> {isProduction ? "PAINEL DA LOJA" : "ESPAÇO DE DEMONSTRAÇÃO"}</p><h1>Um olhar sobre sua <em>loja.</em></h1><p>{isProduction ? "Resumo do catálogo e das atividades registradas da loja." : "Resumo do catálogo e das atividades registradas neste navegador."}</p></div><Link className="button button-dark" href="/#catalogo">Abrir vitrine <span>↗</span></Link></section>
+          <div className="admin-metrics overview-metrics"><article><span>Produtos publicados</span><strong>{catalog.filter((product) => product.isActive !== false).length.toString().padStart(2, "0")}</strong><small>No catálogo atual</small></article><article><span>Pedidos registrados</span><strong>{operations.orders.filter((order) => order.status !== "Cancelado").length.toString().padStart(2, "0")}</strong><small>Pedidos ativos</small></article><article><span>Recebido neste mês</span><strong>{formatPrice(receivedThisMonth)}</strong><small>Entradas confirmadas no financeiro</small></article><article><span>A receber</span><strong>{formatPrice(outstandingCents)}</strong><small>{overdueOrdersCount ? `${overdueOrdersCount} pedido(s) vencido(s)` : `${outstandingOrders.length} pedido(s) com saldo`}</small></article><article><span>Clientes cadastradas</span><strong>{operations.customers.length.toString().padStart(2, "0")}</strong><small>{isProduction ? "Registros da loja" : "Registros locais"}</small></article></div>
           <div className="admin-shortcuts"><a href="#orders">＋ Registrar pedido manual <span>→</span></a><a href="#customers">＋ Cadastrar cliente <span>→</span></a><a href="#catalog">◈ Gerenciar catálogo <span>→</span></a><a href="#categories">▦ Categorias e subcategorias <span>→</span></a><a href="#quotes">▧ Criar orçamento <span>→</span></a><a href="#coupons">% Gerenciar cupons <span>→</span></a></div>
-          <section className="admin-next"><span>RECEBIMENTOS E COBRANÇAS</span><p>Registre cada parcela no pedido. O recebimento também entra no caixa; pedidos cancelados não compõem o saldo a receber. As informações desta demonstração ficam somente neste navegador.</p></section>
+          <section className="admin-next"><span>RECEBIMENTOS E COBRANÇAS</span><p>Registre cada parcela no pedido. O recebimento também entra no caixa; pedidos cancelados não compõem o saldo a receber. {isProduction ? "Os dados são sincronizados com o banco da loja." : "As informações desta demonstração ficam somente neste navegador."}</p></section>
           </>}
-          {section === "catalog" && <section className="admin-catalog" id="catalog"><div className="admin-section-head"><div><p className="eyebrow">PRODUTOS DA LOJA</p><h2>Seu catálogo</h2><p>Edite nome, categoria, preço inicial e descrição. Não adicionamos dados que não estão no site.</p><p className="admin-muted">Adicione até 5 fotos por produto; elas são reduzidas e guardadas somente neste navegador até haver armazenamento de imagens compartilhado.</p></div><label className="admin-search">⌕ <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar produto" /></label></div>
+          {section === "catalog" && <section className="admin-catalog" id="catalog"><div className="admin-section-head"><div><p className="eyebrow">PRODUTOS DA LOJA</p><h2>Seu catálogo</h2><p>Edite nome, categoria, preço inicial e descrição. Não adicionamos dados que não estão no site.</p><p className="admin-muted">Adicione até 5 fotos por produto; em produção, as imagens otimizadas são guardadas no banco compartilhado.</p></div><label className="admin-search">⌕ <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar produto" /></label></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
             <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>PRODUTO</th><th>CATEGORIA</th><th>PREÇO INICIAL</th><th>DISPONIBILIDADE</th><th>ESTOQUE</th><th>DESTAQUE</th><th>STATUS</th></tr></thead><tbody>{filtered.map((product) => <tr key={product.id}>
               <td><input aria-label={`Nome de ${product.name}`} className="admin-input name-input" value={product.name} onChange={(event) => updateProduct(product.id, { name: event.target.value })} /><textarea aria-label={`Descrição de ${product.name}`} className="admin-input description-input" value={product.description} onChange={(event) => updateProduct(product.id, { description: event.target.value })} rows={2} /><div className="product-photo-manager"><label className={`product-photo-upload ${product.images?.length === 5 ? "disabled" : ""}`}>Fotos do produto ({product.images?.length ?? 0}/5)<input aria-label={`Adicionar fotos de ${product.name}`} type="file" accept="image/*" multiple disabled={product.images?.length === 5} onChange={(event) => void addProductPhotos(product.id, event)} /></label>{product.images?.length ? <div className="product-photo-thumbnails">{product.images.map((image, index) => <span className="product-photo-thumb" key={`${product.id}-photo-${index}`}><Image src={image} alt={`${product.name}, foto ${index + 1}`} fill sizes="56px" unoptimized /><button type="button" aria-label={`Remover foto ${index + 1} de ${product.name}`} onClick={() => removeProductPhoto(product.id, index)}>×</button>{index === 0 && <small>Capa</small>}</span>)}</div> : <small className="admin-muted">Ainda não há fotos próprias; a ilustração é temporária.</small>}</div></td>
@@ -447,7 +525,7 @@ export default function AdminPanel() {
             <form className="admin-form-grid quote-form" onSubmit={createQuote}><label>Nome da cliente<input required value={quoteName} onChange={(event) => setQuoteName(event.target.value)} /></label><label>WhatsApp (opcional)<input inputMode="tel" value={quotePhone} onChange={(event) => setQuotePhone(event.target.value)} /></label><label>Item ou serviço<input required value={quoteItem} onChange={(event) => setQuoteItem(event.target.value)} /></label><label>Quantidade<input required type="number" min="1" step="1" value={quoteQuantity} onChange={(event) => setQuoteQuantity(event.target.value)} /></label><label>Valor unitário (R$)<input required inputMode="decimal" placeholder="0,00" value={quotePrice} onChange={(event) => setQuotePrice(event.target.value)} /></label><label>Sinal (%)<input inputMode="decimal" min="0" max="100" placeholder="Opcional" value={quoteDeposit} onChange={(event) => setQuoteDeposit(event.target.value)} /></label><label>Validade até<input required type="date" value={quoteValidUntil} onChange={(event) => setQuoteValidUntil(event.target.value)} /></label><label>Entrega prevista<input required type="date" value={quoteDeliveryDate} onChange={(event) => setQuoteDeliveryDate(event.target.value)} /></label><label className="quote-notes-field">Observações<textarea rows={2} value={quoteNotes} onChange={(event) => setQuoteNotes(event.target.value)} /></label><button className="button button-dark" type="submit">Salvar orçamento</button></form>
             {!operations.quotes.length ? <div className="admin-empty-state"><span>▧</span><h3>Nenhum orçamento salvo</h3><p>Os orçamentos ficam neste navegador. A impressão usa a opção de impressão do dispositivo, onde você pode escolher salvar como PDF.</p></div> : <div className="quote-list">{operations.quotes.map((quote) => { const total = quote.quantity * quote.unitPriceCents; const remaining = Math.max(0, total - quote.depositCents); return <article key={quote.id} className={`quote-card ${printingQuoteId === quote.id ? "print-selected" : ""}`}><div className="quote-card-head"><div><span className="quote-id">{quote.id}</span><h3>{quote.customerName}</h3><small>{new Date(quote.createdAt).toLocaleDateString("pt-BR")}</small></div><span className={`quote-status ${quote.status === "Aprovado" ? "approved" : ""}`}>{quote.status}</span></div><div className="quote-card-body"><div className="quote-line"><span>{quote.quantity} × {quote.itemDescription}</span><strong>{formatPrice(total)}</strong></div><div className="quote-detail-row"><span>Valor unitário</span><span>{formatPrice(quote.unitPriceCents)}</span></div>{quote.depositCents > 0 && <><div className="quote-detail-row"><span>Sinal</span><span>{formatPrice(quote.depositCents)}</span></div><div className="quote-detail-row"><span>Saldo restante</span><span>{formatPrice(remaining)}</span></div></>}{quote.validUntil && <div className="quote-detail-row"><span>Validade</span><span>{new Date(`${quote.validUntil}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.deliveryDate && <div className="quote-detail-row"><span>Entrega prevista</span><span>{new Date(`${quote.deliveryDate}T12:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" })}</span></div>}{quote.notes && <p className="quote-notes">{quote.notes}</p>}</div><div className="quote-card-actions"><label className="quote-status-control">Status<select aria-label={`Status do orçamento ${quote.id}`} data-quote-id={quote.id} value={quote.status} disabled={quote.status === "Convertido em pedido"} onChange={updateQuoteStatus}>{["Em aberto", "Aprovado", "Recusado", "Convertido em pedido"].map((status) => <option key={status}>{status}</option>)}</select></label><button type="button" onClick={() => printQuote(quote.id)}>Imprimir / PDF</button>{confirmQuoteDeleteId === quote.id ? <span className="quote-delete-confirm">Remover este orçamento?<button type="button" onClick={() => confirmDeleteQuote(quote.id)}>Confirmar</button><button type="button" onClick={() => setConfirmQuoteDeleteId("")}>Cancelar</button></span> : <button type="button" onClick={() => deleteQuote(quote.id)}>Excluir</button>}</div></article>; })}</div>}
           </section>}
-          {section === "coupons" && <section className="admin-catalog" id="coupons"><div className="admin-section-head"><div><p className="eyebrow">PROMOÇÕES DA VITRINE</p><h2>Cupons de desconto</h2><p>Cupons ativos podem ser aplicados na sacola. Valores e uso ficam salvos neste navegador.</p></div></div>
+          {section === "coupons" && <section className="admin-catalog" id="coupons"><div className="admin-section-head"><div><p className="eyebrow">PROMOÇÕES DA VITRINE</p><h2>Cupons de desconto</h2><p>Cupons ativos podem ser aplicados na sacola e sincronizam com a vitrine.</p></div></div>
             {notice && <p className="admin-notice" role="status">✓ {notice}</p>}
             <form className="admin-form-grid coupon-admin-form" onSubmit={createCoupon}><label>Código<input required minLength={2} maxLength={24} pattern="[A-Za-z0-9-]{2,24}" autoCapitalize="characters" autoComplete="off" placeholder="Ex.: BEMVINDA10" value={couponCode} onChange={(event) => setCouponCode(event.target.value)} /></label><label>Tipo de desconto<select value={couponType} onChange={(event) => setCouponType(event.target.value as "percentage" | "fixed")}><option value="percentage">Percentual</option><option value="fixed">Valor fixo</option></select></label><label>Desconto {couponType === "percentage" ? "(%)" : "(R$)"}<input required type="text" inputMode="decimal" placeholder={couponType === "percentage" ? "10" : "5,00"} value={couponAmount} onChange={(event) => setCouponAmount(event.target.value)} /></label><button className="button button-dark" type="submit">Criar cupom</button></form>
             <p className="coupon-limitation">Limite de uso único por cliente ainda não está disponível: o fechamento atual é revisado e enviado pelo WhatsApp, sem registro de consumo do cupom.</p>

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { formatPrice, products as initialProducts, storeProfile, type StoreProduct } from "@/data/catalog";
 import { getCatalogSnapshot, getCategorySnapshot, getServerCatalogSnapshot, getServerCategorySnapshot, parseCategories, saveCatalog, saveCategories, subscribeToCatalog, subscribeToCategories } from "@/data/store-catalog";
-import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, subscribeToOperations } from "@/data/store-operations";
+import { getOperationsSnapshot, getServerOperationsSnapshot, parseOperations, saveOperations, subscribeToOperations } from "@/data/store-operations";
 
 type CartLine = {
   key: string;
@@ -157,6 +157,18 @@ export default function Storefront() {
       saveCatalog(data.products as StoreProduct[]);
       saveCategories(data.categories as ReturnType<typeof parseCategories>);
     }).catch(() => { /* Keep the bundled catalog if the shared database is temporarily unavailable. */ });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void fetch("/api/store/operations", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) return;
+      const data = await response.json() as { coupons?: unknown; shippingRules?: unknown };
+      if (!mounted || !Array.isArray(data.coupons) || !Array.isArray(data.shippingRules)) return;
+      const current = parseOperations(getOperationsSnapshot());
+      saveOperations({ ...current, coupons: data.coupons as typeof current.coupons, shippingRules: data.shippingRules as typeof current.shippingRules });
+    }).catch(() => { /* Keep local default settings if the shared database is unavailable. */ });
     return () => { mounted = false; };
   }, []);
 
